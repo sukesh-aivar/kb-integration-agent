@@ -1,0 +1,40 @@
+# Adversarial PII cases (approval condition 5).
+#
+# These are PII formats the regex layer was NOT specifically designed around.
+# They are scored SEPARATELY from the straightforward PII tests and report the
+# regex layer's RECALL on hard cases - including cases we EXPECT to miss. Honest
+# reporting of misses matters: the regex is the cheap first layer; Bedrock
+# Guardrails (contextual) is the second layer in real mode and is expected to
+# catch the obfuscated cases the regex misses (spec 4.2 "both, because...").
+#
+# expect_detected: true  = the regex SHOULD catch it (a miss is a real gap)
+# expect_detected: false = known-hard; regex likely misses, Guardrails should catch
+
+cases:
+  - name: obfuscated_email_at
+    text: "reach me at john dot sample at example dot com"
+    expect_detected: false   # written-out "at"/"dot" - regex misses; Guardrails job
+  - name: spaced_email
+    text: "email: j o h n @ e x a m p l e . c o m"
+    expect_detected: false
+  - name: email_with_plus_tag
+    text: "contact billing+invoices@example.co.uk for receipts"
+    expect_detected: true    # standard-ish; regex should still catch
+  - name: intl_phone_dotted
+    text: "call +44.20.7946.0958 during UK hours"
+    expect_detected: true
+  - name: phone_words
+    text: "my number is two zero two five five five zero one eight eight"
+    expect_detected: false   # spelled-out digits - regex misses
+  - name: card_with_unicode_spaces
+    text: "card 4111\u00a01111\u00a01111\u00a01111 on file"  # non-breaking spaces
+    expect_detected: false   # NBSP between groups - regex expects ascii space/dash
+  - name: card_no_separators
+    text: "charge 4111111111111111 please"
+    expect_detected: true    # bare 16-digit Luhn-valid - regex should catch
+  - name: ssn_us_format
+    text: "SSN 123-45-6789 for the file"
+    expect_detected: false   # US SSN pattern not in our regex (national_id is XX-NNNNNN-X)
+  - name: iban
+    text: "transfer to GB29 NWBK 6016 1331 9268 19"
+    expect_detected: false   # IBAN not modelled by the regex layer

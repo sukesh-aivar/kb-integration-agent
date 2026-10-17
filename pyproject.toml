@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kb-integration-agent"
+version = "0.1.0"
+description = "Knowledge Base Integration Agent (sub-agent #1 of 4) - Ingram Micro conversational AI pilot"
+requires-python = ">=3.11,<3.13"
+readme = "README.md"
+
+# Dependencies are managed in requirements.txt / requirements-dev.txt for the
+# prototype so that versions are pinned in one obvious place for reviewers.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true   # several native deps (umap, hdbscan, magic) ship no stubs
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "evals"]
+markers = [
+    "aws: marks tests that require live AWS access (skipped by default, see Makefile test-all)",
+    "slow: slower end-to-end tests (e.g. clustering the full sample pack); still offline",
+]
+addopts = "-m 'not aws'"

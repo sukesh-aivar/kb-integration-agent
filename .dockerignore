@@ -1,0 +1,15 @@
+.venv/
+.git/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+tests/
+evals/results/
+drafts/
+runs/
+.env
+sample_pack/tickets/
+*.md
+!README.md

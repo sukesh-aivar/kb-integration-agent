@@ -1,0 +1,39 @@
+# HELD-OUT routing fixtures (approval condition 5).
+#
+# These were written AFTER the router + rules, deliberately NOT alongside them,
+# and they reference the REAL fetched Nextcloud documents by path (not synthetic
+# feature dicts). They are scored SEPARATELY from evals/routing_fixtures.yaml so a
+# rule table that happened to be over-fit to the original fixtures is exposed.
+#
+# path is relative to sample_pack/documents/. expected_route: DEFAULT | BDA | REJECT.
+# No expected_rule_id here on purpose - we only assert the route a real file gets,
+# which is the outcome that matters operationally.
+
+fixtures:
+  - name: real_access_webgui_md
+    path: access_webgui.md
+    expected_route: DEFAULT
+  - name: real_quota_md
+    path: quota.md
+    expected_route: DEFAULT
+  - name: real_sharing_md
+    path: sharing.md
+    expected_route: DEFAULT
+  - name: real_conflicts_html
+    path: conflicts.html
+    expected_route: DEFAULT
+  - name: real_userpreferences_txt
+    path: userpreferences.txt
+    expected_route: DEFAULT
+  - name: real_faq_md
+    path: faq.md
+    expected_route: DEFAULT
+  - name: real_sharing_scanned_pdf
+    path: sharing_scanned.pdf
+    expected_route: BDA
+  - name: real_two_factor_scanned_pdf
+    path: two_factor_scanned.pdf
+    expected_route: BDA
+  - name: real_degraded_scan_pdf
+    path: sharing_degraded_scan.pdf
+    expected_route: BDA

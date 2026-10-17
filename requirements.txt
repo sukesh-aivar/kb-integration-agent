@@ -1,0 +1,44 @@
+# Runtime dependencies for the Knowledge Base Integration Agent.
+# Versions are pinned for reproducibility (see spec 2.3).
+#
+# Python version: 3.11 is the supported target for this prototype.
+#   - umap-learn 0.5.6 ships prebuilt wheels for cp311 and hdbscan 0.8.38 builds
+#     cleanly against numpy 1.26 on cp311 (verified at build time).
+#   - 3.12 is expected to work; 3.13/3.14 are NOT supported yet because numba
+#     (a umap-learn dependency) and hdbscan wheels lag the newest CPython.
+#   - This resolves OPEN_QUESTIONS Q (python version) with a verified default.
+
+# --- AWS ---
+boto3==1.35.76            # S3, Bedrock, Bedrock Agent (KB), Data Automation
+botocore==1.35.76
+
+# --- Config / validation ---
+pydantic==2.9.2           # schemas for tickets, tool args, agent contract
+pydantic-settings==2.6.1  # typed config + env loading
+pyyaml==6.0.2             # routing rules + config files
+
+# --- Document feature extraction (local, free - keeps BDA calls down) ---
+python-magic==0.4.27      # TRUE mime type from bytes; needs libmagic system lib
+pymupdf==1.24.14          # fast PDF text/image/page geometry  (licence: AGPL - see OPEN_QUESTIONS Q13)
+pdfplumber==0.11.4        # table detection + per-page char counts
+python-docx==1.1.2        # docx images/tables inspection
+
+# --- Tickets ---
+pandas==2.2.3             # csv / xlsx loading
+openpyxl==3.1.5           # xlsx engine for pandas
+
+# --- Clustering ---
+numpy==1.26.4             # pinned <2.0: numba/hdbscan on cp311 need the 1.26 ABI
+scikit-learn==1.5.2       # silhouette, utilities, (HDBSCAN also available here)
+umap-learn==0.5.6         # dimensionality reduction
+hdbscan==0.8.38.post1     # density clustering
+
+# --- Language detection ---
+langdetect==1.0.9         # chosen over lingua-py: pure-python, no native build,
+                          # adequate for English/non-English flagging (not full NLU).
+
+# --- Observability ---
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp==1.29.0
+structlog==24.4.0         # structured JSON logs with run_id bound

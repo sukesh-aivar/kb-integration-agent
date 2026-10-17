@@ -1,0 +1,79 @@
+# Routing fixtures: file -> expected route (spec 7.5, 1.5 routing accuracy).
+#
+# One entry per routing rule so every rule in config/routing_rules.yaml has at
+# least one case that exercises it. The router (built in step 4) will be run over
+# these fixtures and scored with evals.metrics.routing_accuracy.
+#
+# These describe the FEATURES a file would present (so the router can be tested
+# without the actual binary files existing yet) plus the expected route and the
+# rule_id that should fire. When real document fixtures are added under
+# sample_pack/documents/, add a `path:` to each and drop the synthetic features.
+#
+# route: DEFAULT | BDA | REJECT
+# expected_rule_id must match the rule in config/routing_rules.yaml that wins.
+
+fixtures:
+  - name: plain_text_file
+    expected_route: DEFAULT
+    expected_rule_id: 1
+    features: { mime: "text/plain" }
+
+  - name: markdown_file
+    expected_route: DEFAULT
+    expected_rule_id: 1
+    features: { mime: "text/markdown" }
+
+  - name: standalone_png_image
+    expected_route: BDA
+    expected_rule_id: 2
+    features: { mime: "image/png" }
+
+  - name: docx_with_embedded_images
+    expected_route: BDA
+    expected_rule_id: 3
+    features: { mime: "docx", embedded_images: 4, complex_tables: 0 }
+
+  - name: docx_with_complex_tables
+    expected_route: BDA
+    expected_rule_id: 3
+    features: { mime: "docx", embedded_images: 0, complex_tables: 2 }
+
+  - name: plain_docx
+    expected_route: DEFAULT
+    expected_rule_id: 4
+    features: { mime: "docx", embedded_images: 0, complex_tables: 0 }
+
+  - name: plain_xlsx
+    expected_route: DEFAULT
+    expected_rule_id: 4
+    features: { mime: "xlsx" }
+
+  - name: encrypted_pdf
+    expected_route: REJECT
+    expected_rule_id: 5
+    features: { mime: "pdf", pdf_encrypted_or_unreadable: true }
+
+  - name: scanned_pdf_low_text
+    expected_route: BDA
+    expected_rule_id: 6
+    features: { mime: "pdf", min_page_chars: 12 } # below routing.min_chars_per_page (100)
+
+  - name: image_heavy_pdf
+    expected_route: BDA
+    expected_rule_id: 7
+    features: { mime: "pdf", min_page_chars: 500, max_page_image_area_ratio: 0.8 }
+
+  - name: table_heavy_pdf
+    expected_route: BDA
+    expected_rule_id: 8
+    features: { mime: "pdf", min_page_chars: 500, detected_tables: 5 }
+
+  - name: multi_column_pdf
+    expected_route: BDA
+    expected_rule_id: 9
+    features: { mime: "pdf", min_page_chars: 500, multi_column: true }
+
+  - name: clean_single_column_pdf
+    expected_route: DEFAULT
+    expected_rule_id: 10
+    features: { mime: "pdf", min_page_chars: 1200, detected_tables: 0, multi_column: false }

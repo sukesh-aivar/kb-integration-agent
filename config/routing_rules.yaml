@@ -1,0 +1,78 @@
+# Document routing rule table (spec 4.2). DATA, not code: the router evaluates
+# these rules in order, first match wins, and records the matched rule_id in the
+# audit log so a misroute is debuggable.
+#
+# Thresholds referenced by name resolve against config/default.yaml -> routing.*
+# so numbers live in one place.
+#
+# route: one of DEFAULT | BDA | REJECT
+# Each rule documents WHY it exists; reviewers were not in the design meetings.
+
+rules:
+  - id: 1
+    description: "Plain text / markdown / html / csv need no heavy parsing."
+    route: DEFAULT
+    when:
+      mime_in: ["text/plain", "text/markdown", "text/html", "text/csv"]
+
+  - id: 2
+    description: "Standalone images have no text layer; BDA extracts their text."
+    route: BDA
+    when:
+      mime_in: ["image/jpeg", "image/png"]
+
+  - id: 3
+    description: "DOCX with embedded images or complex tables needs layout-aware BDA."
+    route: BDA
+    when:
+      mime: "docx"
+      any_of:
+        - embedded_images_gt: 0
+        - complex_tables_gt: 0
+
+  - id: 4
+    description: "Plain DOCX/XLSX extract fine with the default local parser."
+    route: DEFAULT
+    when:
+      mime_in: ["docx", "xlsx"]
+
+  - id: 5
+    description: "Encrypted or unreadable PDFs cannot be processed; reject for review."
+    route: REJECT
+    when:
+      mime: "pdf"
+      pdf_encrypted_or_unreadable: true
+
+  - id: 6
+    description: "A PDF page with too few extracted chars is scanned/image -> BDA."
+    route: BDA
+    when:
+      mime: "pdf"
+      any_page_chars_lt: "routing.min_chars_per_page"
+
+  - id: 7
+    description: "A PDF page dominated by image area needs OCR-grade BDA."
+    route: BDA
+    when:
+      mime: "pdf"
+      any_page_image_area_ratio_gt: "routing.max_image_area_ratio"
+
+  - id: 8
+    description: "Table-heavy PDFs lose structure in the default parser -> BDA."
+    route: BDA
+    when:
+      mime: "pdf"
+      detected_tables_gte: "routing.max_tables"
+
+  - id: 9
+    description: "Multi-column PDFs mis-order text in the default parser -> BDA."
+    route: BDA
+    when:
+      mime: "pdf"
+      multi_column: true
+
+  - id: 10
+    description: "Default: cheap local parse, with a deterministic escalation backstop."
+    route: DEFAULT
+    when:
+      always: true

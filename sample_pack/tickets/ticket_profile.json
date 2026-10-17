@@ -1,0 +1,53 @@
+{
+  "schema": "ticket_profile v0.1",
+  "total_tickets": 1522,
+  "intent_count": 20,
+  "per_intent_counts": {
+    "two_factor_setup": 75,
+    "two_factor_methods": 76,
+    "federated_sharing": 76,
+    "user_preferences": 76,
+    "share_via_files_page": 75,
+    "share_public_link": 78,
+    "storage_quota": 76,
+    "file_versions_restore": 75,
+    "session_management": 75,
+    "edit_locally_protocol": 77,
+    "desktop_client_install": 76,
+    "deck_kanban_boards": 76,
+    "sync_conflict": 77,
+    "access_web_interface": 76,
+    "antivirus_scanning": 76,
+    "file_details_sidebar": 77,
+    "desktop_add_account": 76,
+    "notification_settings": 78,
+    "ldap_directory_integration": 75,
+    "share_permissions": 76
+  },
+  "edge_case_counts": {
+    "none": 1341,
+    "no_resolution": 81,
+    "non_english": 28,
+    "pii": 50,
+    "duplicate": 22
+  },
+  "time_split": {
+    "note": "70/30 older/newer. Interpretation is TODO(confirm) Q4.",
+    "older": 1089,
+    "newer": 433
+  },
+  "seed": 42,
+  "columns": [
+    "ticket_id",
+    "subject",
+    "description",
+    "resolution",
+    "status",
+    "created_at",
+    "resolved_at",
+    "tags",
+    "source_platform"
+  ],
+  "labels_file": "labels.csv (hidden ground truth, never read by src/)",
+  "synthetic": true
+}

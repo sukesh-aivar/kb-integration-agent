@@ -1,0 +1,68 @@
+{
+  "_comment": "Least-privilege IAM policy STARTING POINT for the KB Integration Agent (spec 7.4). Scope the S3 statements to the run's prefix and the Bedrock statements to the specific provisioned resources. ARNs with REPLACE_ME / TODO(confirm) are placeholders tracked in OPEN_QUESTIONS.md (Q6/Q7/Q8/Q11) and MUST be narrowed before deployment - do NOT ship these wildcards to production. This document is for review, not direct application.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ScopedS3RunPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::REPLACE_ME_bucket",
+        "arn:aws:s3:::REPLACE_ME_bucket/uploads/*",
+        "arn:aws:s3:::REPLACE_ME_bucket/runs/*",
+        "arn:aws:s3:::REPLACE_ME_bucket/drafts/*",
+        "arn:aws:s3:::REPLACE_ME_bucket/bda-cache/*"
+      ]
+    },
+    {
+      "Sid": "BedrockModelInvoke",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/REPLACE_ME_embedding_model_id",
+        "arn:aws:bedrock:*::foundation-model/REPLACE_ME_claude_model_id"
+      ]
+    },
+    {
+      "Sid": "BedrockGuardrails",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ApplyGuardrail"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:REPLACE_ME_account:guardrail/REPLACE_ME_guardrail_id"
+      ]
+    },
+    {
+      "Sid": "BedrockDataAutomation",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeDataAutomationAsync",
+        "bedrock:GetDataAutomationStatus"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:REPLACE_ME_account:data-automation-project/REPLACE_ME_bda_project"
+      ]
+    },
+    {
+      "Sid": "BedrockKnowledgeBase",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateKnowledgeBase",
+        "bedrock:CreateDataSource",
+        "bedrock:StartIngestionJob",
+        "bedrock:GetIngestionJob",
+        "bedrock:Retrieve"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:REPLACE_ME_account:knowledge-base/*"
+      ]
+    }
+  ]
+}
