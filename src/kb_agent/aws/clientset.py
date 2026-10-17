@@ -95,14 +95,23 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
     )
     embeddings = BedrockEmbeddings(bedrock_runtime, settings.embedding_model_id)
     llm = BedrockLlm(bedrock_runtime, settings.llm_model_id)
-    guardrail = BedrockGuardrail(
-        bedrock_runtime, settings.guardrail_id, settings.guardrail_version
-    )
+
+    # freq-test: when guardrails are disabled, inject a no-op so the Guardrails
+    # API is never called. The offline regex PII layer still runs in validate/draft.
+    if settings.guardrail_enabled:
+        guardrail: GuardrailClient = BedrockGuardrail(
+            bedrock_runtime, settings.guardrail_id, settings.guardrail_version
+        )
+    else:
+        from kb_agent.aws.fakes import NoOpGuardrail
+
+        guardrail = NoOpGuardrail()
+
     kb = BedrockKnowledgeBase(
         session.client("bedrock-agent"),
         session.client("bedrock-agent-runtime"),
         bucket=settings.s3_bucket,
-        role_arn=getattr(settings, "kb_role_arn", "REPLACE_ME_kb_role_arn"),
+        role_arn=settings.kb_role_arn or "REPLACE_ME_kb_role_arn",
         embedding_model_arn=(
             f"arn:aws:bedrock:{region}::foundation-model/{settings.embedding_model_id}"
         ),
@@ -122,13 +131,13 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
 def _vector_store_config(settings: Settings, config: AppConfig) -> dict:  # pragma: no cover
     """Build the KB storageConfiguration for the configured vector store (Q7)."""
     if config.knowledge_base.vector_store == "s3_vectors":
+        # Verified 2026-10-15 against the Bedrock Agent API: s3VectorsConfiguration
+        # accepts indexArn | indexName | vectorBucketArn. We pass the index ARN
+        # directly since that is what was provisioned.
         return {
             "type": "S3_VECTORS",
             "s3VectorsConfiguration": {
-                # TODO(confirm) Q7: exact S3 Vectors index ARN/name once provisioned.
-                "vectorBucketArn": getattr(
-                    settings, "vector_bucket_arn", "REPLACE_ME_vector_bucket_arn"
-                ),
+                "indexArn": settings.vector_index_arn or "REPLACE_ME_vector_index_arn",
             },
         }
     # OpenSearch Serverless path (conditional, Q7).

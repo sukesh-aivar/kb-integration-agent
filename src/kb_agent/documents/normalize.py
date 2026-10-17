@@ -104,3 +104,52 @@ def normalize_documents(
 
     logger.info("normalize_complete", unique=len(results), input=len(docs))
     return results
+
+
+def normalize_raw_documents(
+    docs: list[tuple[str, bytes, Route]],
+    *,
+    run_id: str,
+    store: ObjectStore,
+    data_source_prefix: str,
+    source_type: SourceType = SourceType.UPLOADED_DOC,
+) -> list[NormalizedDocument]:
+    """Path A (freq-test): write RAW document bytes to the KB prefix, not text.
+
+    Unlike :func:`normalize_documents`, this keeps each file's original bytes and
+    extension (e.g. a PDF stays a PDF) so Bedrock Knowledge Base's own internal
+    parser extracts and chunks it during ingestion. Dedup is by byte hash. The
+    ``<filename>.metadata.json`` sidecar is written with the same confirmed
+    format. Used when we want to exercise the KB parser on real binary documents.
+    """
+    seen_hashes: set[str] = set()
+    results: list[NormalizedDocument] = []
+    now = datetime.now(UTC)
+
+    for source_name, data, route in docs:
+        chash = hashlib.sha256(data).hexdigest()
+        if chash in seen_hashes:
+            logger.info("normalize_dedupe_skip", source=source_name, content_hash=chash[:12])
+            continue
+        seen_hashes.add(chash)
+
+        safe_name = source_name.replace("/", "_")  # keeps original extension
+        doc_key = f"{data_source_prefix}/{safe_name}"
+        sidecar_key = f"{doc_key}.metadata.json"
+
+        metadata = DocumentMetadata(
+            source=source_name,
+            source_type=source_type,
+            route=route,
+            content_hash=chash,
+            run_id=run_id,
+            ingested_at=now,
+            language=None,
+        )
+
+        store.put_bytes(doc_key, data)
+        store.put_text(sidecar_key, json.dumps(sidecar_payload(metadata), indent=2))
+        results.append(NormalizedDocument(doc_key, sidecar_key, chash))
+
+    logger.info("normalize_raw_complete", unique=len(results), input=len(docs))
+    return results

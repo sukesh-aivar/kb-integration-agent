@@ -28,7 +28,7 @@ from kb_agent.aws.clientset import ClientSet
 from kb_agent.config import AppConfig
 from kb_agent.contract import AgentInput, AgentOutput, ArtifactRef, RunMetrics
 from kb_agent.documents.knowledge_base import KnowledgeBaseStage, recall_at_5_from_golden
-from kb_agent.documents.normalize import normalize_documents
+from kb_agent.documents.normalize import normalize_raw_documents
 from kb_agent.documents.staging import is_stageable_document
 from kb_agent.join.coverage import coverage_check
 from kb_agent.join.drafting import draft_articles
@@ -268,7 +268,11 @@ class Pipeline:
         manifest: RunManifest,
         golden: list[dict] | None,
     ) -> None:
-        docs: list[tuple[str, str, Route]] = []
+        # Path A (freq-test): copy the RAW bytes of each document to the KB
+        # data-source prefix so Bedrock's own parser ingests the original file
+        # (e.g. a PDF stays a PDF). This replaces the earlier text-only path that
+        # UTF-8-decoded and silently skipped binary files like PDFs.
+        docs: list[tuple[str, bytes, Route]] = []
         for uri in ai.document_uris:
             key = uri.split("/", 3)[-1] if uri.startswith("s3://") else uri
             name = key.rsplit("/", 1)[-1]
@@ -278,11 +282,12 @@ class Pipeline:
                 logger.info("skip_non_content_document", name=name)
                 continue
             try:
-                text = self._clients.store.get_text(key)
-            except (KeyError, UnicodeDecodeError):
+                data = self._clients.store.get_bytes(key)
+            except KeyError:
+                logger.info("document_not_found", key=key)
                 continue
-            docs.append((name, text, Route.DEFAULT))
-        state.normalized_docs = normalize_documents(
+            docs.append((name, data, Route.DEFAULT))
+        state.normalized_docs = normalize_raw_documents(
             docs, run_id=ai.run_id, store=self._clients.store,
             data_source_prefix=f"runs/{ai.run_id}/kb-docs",
             source_type=SourceType.UPLOADED_DOC,

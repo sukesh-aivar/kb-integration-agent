@@ -53,6 +53,15 @@ class Settings(BaseSettings):
 
     guardrail_id: str = "REPLACE_ME_placeholder-guardrail"  # TODO(confirm).
     guardrail_version: str = "DRAFT"
+    # freq-test: disable the Guardrails call (a no-op guardrail is injected).
+    # The offline regex PII layer stays on regardless of this flag.
+    guardrail_enabled: bool = True
+
+    # Real AWS resource ARNs for a KB-with-S3-Vectors run (freq-test). Empty
+    # defaults so an unconfigured run fails loudly rather than hitting placeholders.
+    kb_role_arn: str = ""  # IAM role the KB service assumes (not the agent)
+    vector_index_arn: str = ""  # S3 Vectors index ARN (s3VectorsConfiguration.indexArn)
+    bda_project_arn: str = ""  # only needed for the BDA path (not Path A)
 
     otel_endpoint: str = ""  # empty -> local no-op exporter
     log_level: str = "INFO"
@@ -130,7 +139,7 @@ class AppConfig(BaseModel):
     Validation here means a malformed config fails at load time with a clear
     pydantic error, rather than deep inside a pipeline stage.
     """
-    
+
     seed: int = 42
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)

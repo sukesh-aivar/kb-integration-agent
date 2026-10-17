@@ -9,8 +9,11 @@
 #   - This resolves OPEN_QUESTIONS Q (python version) with a verified default.
 
 # --- AWS ---
-boto3==1.35.76            # S3, Bedrock, Bedrock Agent (KB), Data Automation
-botocore==1.35.76
+# boto3 >= 1.40 is REQUIRED for the S3 Vectors knowledge-base API
+# (storageConfiguration.s3VectorsConfiguration); 1.35.x raised a
+# ParamValidationError. Verified working at 1.43.114 (freq-test, 2026-10-17).
+boto3==1.43.114           # S3, Bedrock, Bedrock Agent (KB), Data Automation, S3 Vectors
+botocore==1.43.114
 
 # --- Config / validation ---
 pydantic==2.9.2           # schemas for tickets, tool args, agent contract

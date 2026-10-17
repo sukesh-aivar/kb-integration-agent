@@ -228,6 +228,18 @@ class FakeGuardrail:
         ]
 
 
+class NoOpGuardrail:
+    """Guardrail that finds nothing (freq-test: Guardrails disabled).
+
+    Injected in --mode aws when ``guardrail_enabled`` is false so the Bedrock
+    Guardrails API is never called. The offline regex PII layer in validate/
+    drafting still runs independently of this, so PII is not entirely unchecked.
+    """
+
+    def scan_pii(self, text: str) -> list[GuardrailPiiFinding]:
+        return []
+
+
 class FakeKnowledgeBase:
     """In-memory KB: naive lexical retrieval over ingested passages.
 
