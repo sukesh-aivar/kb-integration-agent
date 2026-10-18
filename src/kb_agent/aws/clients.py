@@ -118,12 +118,16 @@ class BedrockDataAutomation:
         store: S3ObjectStore,
         *,
         project_arn: str,
+        profile_arn: str,
         poll_interval_s: float = 5.0,
         timeout_s: float = 900.0,
     ) -> None:
         self._client = bda_runtime_client
         self._store = store
         self._project_arn = project_arn
+        # Current BDA requires a data-automation PROFILE arn on invoke (for
+        # cross-region inference), in addition to the project arn.
+        self._profile_arn = profile_arn
         self._poll_interval_s = poll_interval_s
         self._timeout_s = timeout_s
 
@@ -136,6 +140,7 @@ class BedrockDataAutomation:
                 inputConfiguration={"s3Uri": input_s3_uri},
                 outputConfiguration={"s3Uri": output_uri},
                 dataAutomationConfiguration={"dataAutomationProjectArn": self._project_arn},
+                dataAutomationProfileArn=self._profile_arn,
             )
         )
         invocation_arn = resp["invocationArn"]
@@ -194,19 +199,40 @@ class BedrockLlm:
         self._model_id = model_id
 
     def invoke(  # pragma: no cover
-        self, prompt: str, *, max_tokens: int = 1024, temperature: float = 0.0
+        self, prompt: str, *, max_tokens: int = 1024, temperature: float | None = None
     ) -> str:
-        body = json.dumps(
-            {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-        )
+        payload_body: dict[str, Any] = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        # Newer Claude models (e.g. claude-sonnet-5) reject ``temperature``:
+        # "temperature is deprecated for this model". Only send it when a caller
+        # explicitly asks for a non-default value; otherwise let the model decide.
+        if temperature is not None:
+            payload_body["temperature"] = temperature
+        body = json.dumps(payload_body)
         resp = _retry(lambda: self._client.invoke_model(modelId=self._model_id, body=body))
         payload = json.loads(resp["body"].read())
-        return payload["content"][0]["text"]
+        # Claude on Bedrock returns a list of content blocks. Newer models can
+        # emit non-text blocks (e.g. a reasoning/thinking block) before the text
+        # block, so pick the first block that actually carries text rather than
+        # blindly indexing [0] (which raised KeyError: 'text').
+        blocks = payload.get("content", []) or []
+        for block in blocks:
+            if isinstance(block, dict) and "text" in block:
+                return block["text"]
+        # No text block (e.g. the token budget was spent on a reasoning block
+        # and truncated before any answer). Don't fail the whole run: return an
+        # empty string so the caller's JSON-parse fallback handles it, and log
+        # the cause so it is diagnosable.
+        stop = payload.get("stop_reason")
+        logger.warning(
+            "llm_no_text_content",
+            stop_reason=stop,
+            blocks=[b.get("type") for b in blocks if isinstance(b, dict)],
+        )
+        return ""
 
     @property
     def model_id(self) -> str:

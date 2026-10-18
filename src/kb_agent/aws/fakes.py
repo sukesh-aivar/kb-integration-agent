@@ -142,7 +142,9 @@ class FakeLlm:
     _kind_re = re.compile(r"<<KIND:([a-z_]+)>>")
     _ticket_id_re = re.compile(r"\bT\d{5}\b")
 
-    def invoke(self, prompt: str, *, max_tokens: int = 1024, temperature: float = 0.0) -> str:
+    def invoke(
+        self, prompt: str, *, max_tokens: int = 1024, temperature: float | None = None
+    ) -> str:
         kind_match = self._kind_re.search(prompt)
         kind = kind_match.group(1) if kind_match else "unknown"
         handler = {

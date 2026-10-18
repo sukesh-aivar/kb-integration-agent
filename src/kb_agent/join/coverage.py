@@ -19,6 +19,7 @@ import json
 from kb_agent.aws.interfaces import LlmClient
 from kb_agent.config import AppConfig
 from kb_agent.documents.knowledge_base import KnowledgeBaseStage
+from kb_agent.llm_json import extract_json
 from kb_agent.logging_setup import get_logger
 from kb_agent.models import CoverageItem, CoverageStatus, IntentCluster, Ticket
 from kb_agent.prompts import prompt_version, render_prompt
@@ -51,9 +52,12 @@ def _judge(
     prompt = render_prompt(
         "coverage", version, question=question, passages_block=passages_block
     )
-    raw = llm.invoke(prompt, max_tokens=128)
+    # 768 tokens: newer models may spend budget on an internal reasoning block
+    # before the JSON verdict; too small a cap truncates to a thinking-only
+    # response with no answer (stop_reason=max_tokens).
+    raw = llm.invoke(prompt, max_tokens=768)
     try:
-        obj = json.loads(raw)
+        obj = extract_json(raw)
         status = CoverageStatus(obj.get("status", "gap"))
         reason = str(obj.get("reason", ""))
     except (json.JSONDecodeError, ValueError):

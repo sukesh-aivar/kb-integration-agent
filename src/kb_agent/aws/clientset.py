@@ -88,10 +88,20 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
     # TODO(confirm) Q6/Q11: BDA project ARN + KB service role ARN are not yet
     # provisioned; read from settings so nothing is hard-coded. A real run fails
     # loudly if these remain placeholders.
+    bda_profile_arn = settings.bda_profile_arn
+    if not bda_profile_arn:
+        account = session.client("sts").get_caller_identity()["Account"]
+        bda_profile_arn = (
+            f"arn:aws:bedrock:{region}:{account}:data-automation-profile/us.data-automation-v1"
+        )
     bda = BedrockDataAutomation(
         session.client("bedrock-data-automation-runtime"),
         store,
-        project_arn=getattr(settings, "bda_project_arn", "REPLACE_ME_bda_project_arn"),
+        project_arn=settings.bda_project_arn or "REPLACE_ME_bda_project_arn",
+        profile_arn=bda_profile_arn,
+        # Large scanned PDFs (hundreds of pages) take well over the 15-min
+        # default; allow up to 1 hour of polling before timing out.
+        timeout_s=3600.0,
     )
     embeddings = BedrockEmbeddings(bedrock_runtime, settings.embedding_model_id)
     llm = BedrockLlm(bedrock_runtime, settings.llm_model_id)

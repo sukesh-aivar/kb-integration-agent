@@ -87,8 +87,15 @@ class LlmClient(Protocol):
     against a schema (spec 6). ``prompt_version`` is recorded per call.
     """
 
-    def invoke(self, prompt: str, *, max_tokens: int = 1024, temperature: float = 0.0) -> str:
-        """Run a single completion. Deterministic defaults (temp 0) for repeatability."""
+    def invoke(
+        self, prompt: str, *, max_tokens: int = 1024, temperature: float | None = None
+    ) -> str:
+        """Run a single completion.
+
+        ``temperature`` defaults to ``None`` (omitted from the request) because
+        newer Claude models reject the parameter; pass a float only when a model
+        still accepts it and you need a non-default value.
+        """
         ...
 
     @property

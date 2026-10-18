@@ -20,3 +20,5 @@ htmlcov/
 evals/results/
 drafts/
 runs/
+# Local test data (synthetic tickets / labels — never commit)
+testdata/

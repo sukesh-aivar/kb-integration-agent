@@ -23,6 +23,7 @@ import json
 from kb_agent.aws.interfaces import GuardrailClient, LlmClient, ObjectStore
 from kb_agent.config import AppConfig
 from kb_agent.documents.pii import regex_pii_findings
+from kb_agent.llm_json import extract_json
 from kb_agent.logging_setup import get_logger
 from kb_agent.models import (
     Article,
@@ -144,7 +145,9 @@ def draft_articles(
             intent_description=cluster.description,
             tickets_block=tickets_block,
         )
-        raw = llm.invoke(prompt, max_tokens=1024)
+        # 2048 tokens: the article JSON plus an internal reasoning block the
+        # newer models emit; 1024 truncated mid-JSON ("unparseable draft JSON").
+        raw = llm.invoke(prompt, max_tokens=2048)
         outcome = _finalise_draft(
             raw, cluster, valid_ids, run_id, llm.model_id, guardrail, store, version
         )
@@ -167,7 +170,7 @@ def _finalise_draft(
 ) -> DraftOutcome:
     """Parse, validate citations, PII re-scan, and store one draft (spec 4.4)."""
     try:
-        obj = json.loads(raw)
+        obj = extract_json(raw)
     except json.JSONDecodeError:
         return DraftOutcome(cluster.intent_name, None, False, "unparseable draft JSON")
 

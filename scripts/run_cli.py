@@ -46,6 +46,11 @@ def main() -> int:
         help="s3://bucket/key of a document to ingest (repeatable).",
     )
     parser.add_argument("--ticket-uri", default=None, help="s3://bucket/key of a ticket CSV.")
+    parser.add_argument(
+        "--force-bda",
+        action="store_true",
+        help="Force every document down the BDA route regardless of routing (test).",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -62,7 +67,7 @@ def main() -> int:
         document_uris=args.document_uri,
         ticket_uri=args.ticket_uri,
     )
-    output = Pipeline(clients, config).run(agent_input)
+    output = Pipeline(clients, config, force_bda=args.force_bda).run(agent_input)
 
     print("\n=== RUN COMPLETE ===")
     print(f"status : {output.status}")

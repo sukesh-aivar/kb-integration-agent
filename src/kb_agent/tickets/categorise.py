@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 from kb_agent.aws.interfaces import LlmClient
+from kb_agent.llm_json import extract_json
 from kb_agent.logging_setup import get_logger
 from kb_agent.models import Ticket
 from kb_agent.prompts import prompt_version, render_prompt
@@ -49,7 +50,8 @@ def categorise_tickets(
             candidates=", ".join(repr(c) for c in candidates),
             ticket_text=ticket.embedding_text(),  # subject+description only
         )
-        raw = llm.invoke(prompt, max_tokens=64)
+        # 256 tokens: a reasoning block can exceed a tiny cap before the label.
+        raw = llm.invoke(prompt, max_tokens=256)
         label = _parse_label(raw, allowed)
         labels.append(label)
 
@@ -60,7 +62,7 @@ def categorise_tickets(
 def _parse_label(raw: str, allowed: set[str]) -> str:
     """Parse the LLM JSON and coerce to an allowed label, defaulting safely."""
     try:
-        obj = json.loads(raw)
+        obj = extract_json(raw)
         label = str(obj.get("intent", "uncategorised"))
     except (json.JSONDecodeError, AttributeError):
         return "uncategorised"

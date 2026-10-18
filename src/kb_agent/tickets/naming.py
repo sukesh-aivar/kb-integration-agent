@@ -22,6 +22,7 @@ import random
 import numpy as np
 
 from kb_agent.aws.interfaces import LlmClient
+from kb_agent.llm_json import extract_json
 from kb_agent.logging_setup import get_logger
 from kb_agent.models import IntentCluster, Ticket
 from kb_agent.prompts import prompt_version, render_prompt
@@ -98,7 +99,9 @@ def name_clusters(
             f"[{tickets[i].ticket_id}] {tickets[i].embedding_text()}" for i in sample_idx
         )
         prompt = render_prompt("naming", version, tickets_block=tickets_block)
-        raw = llm.invoke(prompt, max_tokens=256)
+        # 512 tokens: newer models may spend budget on an internal reasoning
+        # block before the JSON, so give the JSON answer room not to truncate.
+        raw = llm.invoke(prompt, max_tokens=512)
         parsed = _parse_naming(raw)
 
         clusters.append(
@@ -122,7 +125,7 @@ def name_clusters(
 def _parse_naming(raw: str) -> dict:
     """Parse+validate the naming JSON, with safe defaults on malformed output."""
     try:
-        obj = json.loads(raw)
+        obj = extract_json(raw)
     except json.JSONDecodeError:
         return {
             "intent_name": "unparsed_cluster",

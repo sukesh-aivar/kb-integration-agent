@@ -27,8 +27,11 @@ from typing import Any
 from kb_agent.aws.clientset import ClientSet
 from kb_agent.config import AppConfig
 from kb_agent.contract import AgentInput, AgentOutput, ArtifactRef, RunMetrics
+from kb_agent.documents.bda import BdaProcessor
+from kb_agent.documents.features import extract_features
 from kb_agent.documents.knowledge_base import KnowledgeBaseStage, recall_at_5_from_golden
-from kb_agent.documents.normalize import normalize_raw_documents
+from kb_agent.documents.normalize import normalize_documents, normalize_raw_documents
+from kb_agent.documents.router import route_document
 from kb_agent.documents.staging import is_stageable_document
 from kb_agent.join.coverage import coverage_check
 from kb_agent.join.drafting import draft_articles
@@ -84,9 +87,10 @@ class PipelineState:
 class Pipeline:
     """Resumable orchestration of all stages for one run."""
 
-    def __init__(self, clients: ClientSet, config: AppConfig) -> None:
+    def __init__(self, clients: ClientSet, config: AppConfig, *, force_bda: bool = False) -> None:
         self._clients = clients
         self._config = config
+        self._force_bda = force_bda  # force every document down the BDA route (test)
 
     # --- resumability helpers ------------------------------------------------
 
@@ -268,16 +272,21 @@ class Pipeline:
         manifest: RunManifest,
         golden: list[dict] | None,
     ) -> None:
-        # Path A (freq-test): copy the RAW bytes of each document to the KB
-        # data-source prefix so Bedrock's own parser ingests the original file
-        # (e.g. a PDF stays a PDF). This replaces the earlier text-only path that
-        # UTF-8-decoded and silently skipped binary files like PDFs.
-        docs: list[tuple[str, bytes, Route]] = []
+        # Red pill: for each document, extract features, route it, then:
+        #   * BDA    -> call Bedrock Data Automation, write the returned MARKDOWN
+        #              to the KB prefix (KB ingests clean text);
+        #   * DEFAULT -> write the RAW bytes (Bedrock's own parser ingests it);
+        #   * REJECT  -> skip and log.
+        # ``force_bda`` (from the CLI) forces the BDA route on every document for
+        # testing, regardless of what the router decides.
+        prefix = f"runs/{ai.run_id}/kb-docs"
+        raw_docs: list[tuple[str, bytes, Route]] = []
+        md_docs: list[tuple[str, str, Route]] = []
+        bda_proc = None
+
         for uri in ai.document_uris:
             key = uri.split("/", 3)[-1] if uri.startswith("s3://") else uri
             name = key.rsplit("/", 1)[-1]
-            # Defensive: never ingest non-content files (README, licences, etc.)
-            # even if the orchestrator passes them (spec 4.2).
             if not is_stageable_document(name):
                 logger.info("skip_non_content_document", name=name)
                 continue
@@ -286,12 +295,45 @@ class Pipeline:
             except KeyError:
                 logger.info("document_not_found", key=key)
                 continue
-            docs.append((name, data, Route.DEFAULT))
-        state.normalized_docs = normalize_raw_documents(
-            docs, run_id=ai.run_id, store=self._clients.store,
-            data_source_prefix=f"runs/{ai.run_id}/kb-docs",
-            source_type=SourceType.UPLOADED_DOC,
-        )
+
+            features = extract_features(name, data)
+            decision = route_document(features, self._config)
+            route = Route.BDA if self._force_bda else decision.route
+            manifest.routing_decisions.append(
+                {"file": name, "route": route.value, "rule_id": decision.rule_id,
+                 "reason": decision.reason, "forced": self._force_bda}
+            )
+            logger.info("route_document", file=name, route=route.value, rule_id=decision.rule_id)
+
+            if route is Route.REJECT:
+                logger.info("document_rejected", file=name, reason=decision.reason)
+                continue
+            if route is Route.BDA:
+                if bda_proc is None:
+                    bda_proc = BdaProcessor(
+                        self._clients.bda, self._clients.store,
+                        page_cap=self._config.cost.bda_page_cap_per_run,
+                    )
+                input_uri = uri if uri.startswith("s3://") else f"s3://{key}"
+                result = bda_proc.process(name, data, input_uri)
+                logger.info("bda_processed", file=name, pages=result.pages_processed,
+                            cached=result.cached)
+                md_docs.append((name, result.markdown, route))
+            else:  # DEFAULT
+                raw_docs.append((name, data, route))
+
+        normalized = []
+        if raw_docs:
+            normalized += normalize_raw_documents(
+                raw_docs, run_id=ai.run_id, store=self._clients.store,
+                data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
+            )
+        if md_docs:
+            normalized += normalize_documents(
+                md_docs, run_id=ai.run_id, store=self._clients.store,
+                data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
+            )
+        state.normalized_docs = normalized
         state.metrics.document_count = len(state.normalized_docs)
 
     def _stage_kb_create(

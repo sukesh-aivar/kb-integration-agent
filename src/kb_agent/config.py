@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     kb_role_arn: str = ""  # IAM role the KB service assumes (not the agent)
     vector_index_arn: str = ""  # S3 Vectors index ARN (s3VectorsConfiguration.indexArn)
     bda_project_arn: str = ""  # only needed for the BDA path (not Path A)
+    # BDA now requires a data-automation PROFILE arn on invoke. If left empty it
+    # is derived as arn:aws:bedrock:<region>:<account>:data-automation-profile/
+    # us.data-automation-v1 (the standard cross-region profile).
+    bda_profile_arn: str = ""
 
     otel_endpoint: str = ""  # empty -> local no-op exporter
     log_level: str = "INFO"
