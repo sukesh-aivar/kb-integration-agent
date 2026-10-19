@@ -309,6 +309,10 @@ class BedrockKnowledgeBase:
             )
         )
         kb_id = kb["knowledgeBase"]["knowledgeBaseId"]
+        # A freshly created KB is CREATING for a few seconds. Creating the data
+        # source and (especially) starting ingestion against a CREATING KB fails
+        # with ConflictException, so wait for ACTIVE before proceeding.
+        self._wait_for_kb_active(kb_id)
         chunking = _chunking_config(chunking_strategy)
         ds = _retry(
             lambda: self._agent.create_data_source(
@@ -326,6 +330,28 @@ class BedrockKnowledgeBase:
         )
         self._data_source_id = ds["dataSource"]["dataSourceId"]
         return kb_id
+
+    def _wait_for_kb_active(  # pragma: no cover
+        self, kb_id: str, timeout_s: float = 300.0
+    ) -> None:
+        """Poll the KB until it leaves CREATING (reaches ACTIVE).
+
+        Raises IngestionError if the KB ends in a failed state or does not become
+        ACTIVE within ``timeout_s``.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            resp = _retry(lambda: self._agent.get_knowledge_base(knowledgeBaseId=kb_id))
+            status = resp["knowledgeBase"]["status"]
+            if status == "ACTIVE":
+                return
+            if status in {"FAILED", "DELETING", "DELETE_UNSUCCESSFUL"}:
+                raise IngestionError(f"KnowledgeBase {kb_id} entered status {status}")
+            if time.monotonic() > deadline:
+                raise IngestionError(
+                    f"KnowledgeBase {kb_id} not ACTIVE after {timeout_s}s (status {status})"
+                )
+            time.sleep(self._poll_interval_s)
 
     def start_ingestion(self, kb_id: str) -> str:  # pragma: no cover
         if self._data_source_id is None:
