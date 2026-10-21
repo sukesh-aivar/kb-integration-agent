@@ -181,3 +181,30 @@ assumptions. Three clarifications that refine (not contradict) the spec:
 Because there are no blocking conflicts, I will proceed to build per the plan.
 Items genuinely unconfirmed (BDA Region list, S3 Vectors GA/Region) stay OPEN
 under Q6/Q7 and are NOT invented.
+
+---
+
+## POC frontend (UI only) — build spec section 13
+
+Logged while building `web/` on branch `kbagent-poc`. The UI is mock-first; none
+of these block a mock-mode review, but they do block the live wiring.
+
+| # | Question | Owner | Blocks | Status | Notes / placeholder in code |
+|---|----------|-------|--------|--------|------------------------------|
+| P1 | Official brand palette and font, or keep the values sampled from screenshots? | Manager | `web/styles.css` section 2 | OPEN | Sampled tokens in `:root`; one swap point if an official palette arrives |
+| P2 | Is the supplied logo PNG suitable for the top bar? | Human | `web/assets/logo.png` | RESOLVED | Now using the wide transparent wordmark `Ingram_micro_logo.png` (791×157, RGBA, transparent background). Displayed height-constrained (26px, width auto). Renders cleanly on light and dark bars — verified both. (Earlier square 840×859 white-background icon rendered tiny and showed a white box in dark mode; replaced.) |
+| P3 | Does a normal run skip `kb_retrieve`, and does the status response report the skip set? | Kiro, from backend | step list skip rules (section 4) | ANSWERED (from code) — see note | In `pipeline.py`, `_stage_kb_retrieve` is **not skipped**; it runs but no-ops unless a golden question set is supplied (recall@5 eval). So in a normal run it completes quickly rather than being "skipped". The status API has no golden concept. **UI decision:** treat `kb_retrieve` as a fast `done` step by default; only show it `skipped` if the backend's status response explicitly says so. |
+| P4 | Confirmed per-run limits: file count, per-file size, total size? | Manager + cost owner | upload validation (section 3.3) | PLACEHOLDER | Using spec defaults in `config.example.js` LIMITS: 10 files / 50 MB each / 150 MB total; ticket 1 file / 50 MB |
+| P5 | Should the "View an example run" path be available before sign-in, or only after? | Manager | sign-in screen (section 3.2) | PLACEHOLDER | Built as available **before** sign-in (fastest reliable demo path); trivially gated later if required |
+| P6 | Real `STALE_AFTER` value — 60s or longer? | Kiro, from observed run times | "still working" callout (section 3.4) | ANSWERED (from observed runs) — see note | 60s is **too low**: observed `normalize_docs` (BDA) ran ~48–77s and `kb_ingest` ~12–60s on real runs, so 60s would false-alarm on a normal run. Set `STALE_AFTER: 120` in `config.example.js`. Revisit if BDA on larger scans runs longer. |
+| P7 | Will reviewers have AWS console access (should "Open in AWS console" links appear beside S3 objects)? | Manager | outputs screen (section 3.5) | OPEN | Not built; S3 URIs shown with a copy button only. Add console deep-links if confirmed yes. |
+
+### Agent change requested from the POC frontend review (item A4)
+
+The UI shows `kb_retrieve` as **skipped** ("No question set supplied") in a normal
+run, because the step no-ops without a golden question set and showing it "Done"
+would claim a check that did not happen. For the live build this requires the
+**backend status response to report `kb_retrieve` with `state: "skipped"` and a
+`skip_reason`** in a normal run (the UI already prefers the backend's skip set and
+only falls back to its own rules). Logged here as an agent-side change to make;
+the mock models the intended behaviour now.

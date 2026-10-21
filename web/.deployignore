@@ -1,0 +1,10 @@
+# Files that MUST NOT ship in the deployed (live) bundle.
+# There is no bundler; the deploy step (static upload to S3/CloudFront) must
+# exclude these. mock.js is demo-only fixture code and is never loaded when a
+# real API_BASE_URL is configured (app.js imports it only in mock mode), but it
+# is excluded from the deployed bundle as defence in depth so fixture data can
+# never be served live.
+mock.js
+.deployignore
+IMPLEMENTATION_REVIEW.md
+config.example.js

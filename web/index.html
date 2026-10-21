@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KB Integration Agent — demonstration pilot</title>
+  <meta name="description" content="Turn support content into a searchable knowledge base." />
+
+  <!-- Inter from Google Fonts, with a full system fallback stack in CSS so the
+       page is acceptable if the font fails to load (unknown venue network). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============================================ inline SVG icon sprite ===== -->
+  <!-- No icon library (spec 7). 20px, stroke 1.75, round caps, currentColor.
+       Reference with <svg class="ico"><use href="#i-check"/></svg>. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <g id="s" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></g>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-cross" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-database" viewBox="0 0 24 24"><path d="M12 3c4.97 0 9 1.34 9 3s-4.03 3-9 3-9-1.34-9-3 4.03-3 9-3Zm9 3v12c0 1.66-4.03 3-9 3s-9-1.34-9-3V6m18 6c0 1.66-4.03 3-9 3s-9-1.34-9-3" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 11v5m0-8h.01" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3Zm0 6v5m0 3h.01" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12m0 0 5-5m-5 5-5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+
+  <!-- ====================================================== persistent chrome -->
+
+  <!-- 1. Mock-mode bar (shown only in mock mode; populated/toggled by app.js) -->
+  <div id="mockbar" class="mockbar" hidden>
+    <span><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-info"/></svg>
+      Mock data: no AWS calls are made, and downloads are disabled.</span>
+    <div class="controls">
+      <label>Scenario
+        <select id="mock-scenario">
+          <option value="normal">Normal run</option>
+          <option value="slow">Slow parse</option>
+          <option value="fail">Fails while indexing</option>
+        </select>
+      </label>
+      <label>Speed
+        <select id="mock-speed">
+          <option value="1">1×</option>
+          <option value="3" selected>3×</option>
+          <option value="10">10×</option>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <!-- 2. Top bar -->
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand">
+        <!-- Logo: supplied PNG when present; text wordmark fallback otherwise,
+             same slot/spacing so dropping the file in shifts nothing. app.js
+             hides whichever is not applicable after probing the image. -->
+        <img id="logo-img" src="assets/logo.png" alt="Ingram Micro" hidden />
+        <span id="logo-wordmark" class="wordmark">Ingram Micro</span>
+        <span class="rule" aria-hidden="true"></span>
+        <span class="product">KB Integration Agent</span>
+      </div>
+      <div class="right" id="user-controls" hidden>
+        <span id="user-email" class="chip info"></span>
+        <button id="sign-out" class="btn btn-secondary btn-small">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 3. Step indicator (hidden on sign-in) -->
+  <nav id="step-indicator" class="stepindicator" aria-label="Progress through the flow" hidden>
+    <div class="wrap">
+      <ol>
+        <li data-step="upload"><span class="num">1</span> Upload</li>
+        <li class="joiner-wrap" aria-hidden="true"><span class="joiner"></span></li>
+        <li data-step="progress"><span class="num">2</span> Progress</li>
+        <li class="joiner-wrap" aria-hidden="true"><span class="joiner"></span></li>
+        <li data-step="outputs"><span class="num">3</span> Outputs</li>
+      </ol>
+    </div>
+  </nav>
+
+  <!-- 4. Data banner -->
+  <div class="data-banner">
+    <svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-info"/></svg>
+    <span><strong>Demonstration pilot.</strong> Sample or masked data only. Do not upload production or personal data.</span>
+  </div>
+
+  <!-- live region for step transitions / terminal state (a11y 6) -->
+  <div id="live-region" class="sr-only" aria-live="polite"></div>
+
+  <main>
+    <!-- ================================================= SCREEN: sign-in ===== -->
+    <section id="screen-signin" class="screen" aria-labelledby="signin-title">
+      <div class="wrap">
+        <div class="hero">
+          <div>
+            <h1 id="signin-title">Turn support content into a searchable knowledge base</h1>
+            <p class="lead">Upload manuals, FAQs and a ticket export. Watch every step run, then see exactly where the results landed in S3 and S3 Vectors.</p>
+            <div class="btn-row">
+              <button id="btn-signin" class="btn btn-primary">Sign in</button>
+              <button id="btn-example" class="btn btn-secondary">View an example run</button>
+            </div>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="hero-panel"></div>
+            <!-- decorative preview cards (illustrative only, aria-hidden). Labelled
+                 "Example" so the two completed steps are not read as a live run. -->
+            <div class="float-card big">
+              <h4>Example</h4>
+              <div class="mini-step"><span class="mini-dot done"><svg width="12" height="12"><use href="#i-check"/></svg></span> Reading and parsing documents</div>
+              <div class="mini-step"><span class="mini-dot done"><svg width="12" height="12"><use href="#i-check"/></svg></span> Creating the knowledge base</div>
+              <div class="mini-step"><span class="mini-dot run"></span> Indexing content</div>
+              <div class="mini-step"><span class="mini-dot"></span> Checking retrieval</div>
+            </div>
+            <div class="float-card small">
+              <h4>Chunks indexed</h4>
+              <div class="barchart">
+                <span class="bar" style="height:40%"></span>
+                <span class="bar" style="height:65%"></span>
+                <span class="bar" style="height:50%"></span>
+                <span class="bar" style="height:85%"></span>
+                <span class="bar" style="height:70%"></span>
+                <span class="bar" style="height:95%"></span>
+                <span class="bar" style="height:60%"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================= SCREEN: upload ====== -->
+    <section id="screen-upload" class="screen" aria-labelledby="upload-title" hidden>
+      <div class="wrap stack-24">
+        <div>
+          <h1 id="upload-title">Upload</h1>
+          <p class="lead">Add the support documents you want turned into a knowledge base. A ticket export is optional, and unlocks the intent view, coverage gaps and drafted articles.</p>
+        </div>
+
+        <!-- IMPORTANT: two SEPARATE drop zones are mandatory, not cosmetic. The
+             agent's contract has a LIST of document_uris and a SINGLE ticket_uri;
+             a reviewer must not be able to drop a ticket CSV into the documents
+             list, or a document into the ticket slot. -->
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <span class="icon-circle"><svg width="20" height="20"><use href="#i-file"/></svg></span>
+              <h3>Support documents</h3>
+            </div>
+            <div id="dz-docs" class="dropzone" tabindex="0" role="button"
+                 aria-label="Support documents drop zone. Drag files here or press Enter to choose files.">
+              <span class="icon-circle"><svg width="20" height="20"><use href="#i-upload"/></svg></span>
+              <div>Drag files here or choose files</div>
+              <div class="types">.pdf, .docx, .txt, .md, .html</div>
+            </div>
+            <div class="limits-line">Up to 10 files, 50 MB each, 150 MB in total.</div>
+            <input id="input-docs" type="file" multiple accept=".pdf,.docx,.txt,.md,.html" hidden />
+            <div id="err-docs" class="err-list" role="alert" aria-live="assertive"></div>
+            <ul id="list-docs" class="filelist"></ul>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <span class="icon-circle"><svg width="20" height="20"><use href="#i-list"/></svg></span>
+              <h3>Ticket export</h3>
+              <span class="chip">Optional</span>
+            </div>
+            <div id="dz-tickets" class="dropzone" tabindex="0" role="button"
+                 aria-label="Ticket export drop zone. Drag a file here or press Enter to choose a file.">
+              <span class="icon-circle"><svg width="20" height="20"><use href="#i-upload"/></svg></span>
+              <div>Drag a file here or choose a file</div>
+              <div class="types">.csv, .json, .xlsx</div>
+            </div>
+            <div class="limits-line">One file, up to 50 MB.</div>
+            <input id="input-tickets" type="file" accept=".csv,.json,.xlsx" hidden />
+            <div id="err-tickets" class="err-list" role="alert" aria-live="assertive"></div>
+            <ul id="list-tickets" class="filelist"></ul>
+          </div>
+        </div>
+
+        <!-- documents-only notice: INFO, not a warning — the reviewer has done
+             nothing wrong, this is just what the run will and won't produce. -->
+        <div id="docs-only-warning" class="callout info" hidden>
+          <svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-info"/></svg>
+          <span><strong>Documents only.</strong> This run builds the knowledge base but will not produce intents, coverage gaps or drafted articles. The ticket steps will show as skipped.</span>
+        </div>
+
+        <div class="btn-row">
+          <button id="btn-sample-docs" class="btn btn-ghost">Add sample files</button>
+          <button id="btn-sample-tickets" class="btn btn-ghost">Add sample ticket export</button>
+        </div>
+        <!-- extra bottom padding so the sticky action bar never covers content -->
+        <div style="height:16px"></div>
+      </div>
+
+      <!-- Sticky bottom action bar (item 15): Start run stays reachable after
+           files push the summary below the fold. -->
+      <div class="action-bar">
+        <div class="wrap action-bar-inner">
+          <span id="upload-summary" class="lead" style="margin:0"></span>
+          <button id="btn-start" class="btn btn-primary" disabled>Start run</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- =============================================== SCREEN: progress ===== -->
+    <section id="screen-progress" class="screen" aria-labelledby="progress-title" hidden>
+      <div class="wrap stack-24">
+        <h1 id="progress-title" class="sr-only">Run progress</h1>
+
+        <!-- Block 1: run header -->
+        <div class="card">
+          <div class="run-header">
+            <div>
+              <div style="color:var(--muted);font-size:14px">Run</div>
+              <div><span id="run-id" class="mono" style="font-size:16px;color:var(--ink)"></span>
+                <span id="run-status" class="chip info">Running</span></div>
+            </div>
+            <div class="elapsed">
+              <div style="color:var(--muted);font-size:14px">Elapsed</div>
+              <div class="big tnum" id="elapsed">0:00</div>
+            </div>
+          </div>
+          <div style="margin-top:16px" class="progress" role="progressbar"
+               aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Overall run progress">
+            <div id="overall-fill" class="fill running"></div>
+          </div>
+          <div class="bar-caption">
+            <span id="steps-caption">0 of 11 steps complete</span>
+            <span>Large scanned documents can take several minutes. A step that stays “In progress” for a while is normal.</span>
+          </div>
+        </div>
+
+        <!-- Block 2: still-working notice (conditional) -->
+        <div id="still-working" class="callout warn" hidden>
+          <svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-clock"/></svg>
+          <span id="still-working-text"></span>
+        </div>
+
+        <!-- Two-column live layout (>=1100px): Now panel + Activity on the left,
+             the step list on the right, so the live elements stay in one viewport. -->
+        <div class="progress-grid">
+          <div class="progress-left stack-24">
+            <!-- Block 3: "right now" panel -->
+            <div id="now-panel" class="nowpanel">
+              <div class="now-head">
+                <div>
+                  <div class="stepno" id="now-stepno">Getting ready</div>
+                  <div class="label" id="now-label">Getting ready</div>
+                </div>
+                <span class="now-pulse" id="now-pulse" aria-hidden="true"></span>
+              </div>
+              <p class="desc" id="now-desc">The run is being prepared.</p>
+              <div class="insight" id="now-insight" hidden>
+                <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-info"/></svg>
+                <span id="now-insight-text"></span>
+              </div>
+              <div class="eta" id="now-eta" hidden></div>
+              <div class="next" id="now-next"></div>
+              <div id="now-actions" class="btn-row" style="margin-top:16px"></div>
+              <details id="now-techdetail" hidden style="margin-top:12px">
+                <summary>Show technical detail</summary>
+                <div class="pre" id="now-error"></div>
+              </details>
+            </div>
+
+            <!-- Block 5: activity feed -->
+            <div class="card">
+              <div class="card-head" style="justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span class="icon-circle compact"><svg width="18" height="18"><use href="#i-clock"/></svg></span>
+                  <h3>Activity</h3>
+                </div>
+                <button id="btn-show-all-activity" class="btn btn-ghost btn-small" hidden>Show all activity</button>
+              </div>
+              <ul class="feed" id="activity"></ul>
+            </div>
+          </div>
+
+          <!-- Block 4: step list -->
+          <div class="progress-right stack-24">
+            <div class="card">
+              <div class="card-head">
+                <span class="icon-circle compact"><svg width="18" height="18"><use href="#i-file"/></svg></span>
+                <h3>Documents</h3>
+              </div>
+              <ul class="steplist" id="group-Documents"></ul>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span class="icon-circle compact"><svg width="18" height="18"><use href="#i-list"/></svg></span>
+                <h3>Tickets</h3>
+              </div>
+              <ul class="steplist" id="group-Tickets"></ul>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span class="icon-circle compact"><svg width="18" height="18"><use href="#i-database"/></svg></span>
+                <h3>Joining the results</h3>
+              </div>
+              <ul class="steplist" id="group-Joining the results"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sticky mini status strip: appears once the run header scrolls away. -->
+      <div id="mini-strip" class="mini-strip" hidden aria-hidden="true">
+        <div class="wrap mini-strip-inner">
+          <span class="mini-step" id="mini-step">Getting ready</span>
+          <span class="mini-elapsed tnum" id="mini-elapsed">0:00</span>
+          <div class="mini-bar progress"><div class="fill running" id="mini-fill"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ SCREEN: outputs ===== -->
+    <section id="screen-outputs" class="screen" aria-labelledby="outputs-title" hidden>
+      <div class="wrap stack-24">
+        <div class="outhead">
+          <div class="meta">
+            <h1 id="outputs-title">Outputs</h1>
+            <span id="out-runid" class="mono"></span>
+            <span id="out-status" class="chip ok">Complete</span>
+            <span id="out-time" class="chip">—</span>
+          </div>
+          <div class="btn-row">
+            <button id="btn-back-progress" class="btn btn-ghost">Back to progress</button>
+            <button id="btn-another" class="btn btn-secondary">Start another run</button>
+          </div>
+        </div>
+
+        <!-- 2. run summary -->
+        <div class="card">
+          <div class="card-head"><h3>Run summary</h3></div>
+          <dl class="dl" id="out-summary"></dl>
+        </div>
+
+        <!-- 3. routing -->
+        <div class="card">
+          <div class="card-head"><h3>How each file was routed</h3></div>
+          <p class="lead" style="margin:0 0 12px">Bedrock Data Automation is billed per page, so it is used only when a file needs it.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>file</th><th>size</th><th>pages</th><th>parser</th><th>rule</th><th>reason</th></tr></thead>
+              <tbody id="out-routing"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 4. landed in S3 -->
+        <div class="card">
+          <div class="card-head"><h3>Landed in S3</h3></div>
+          <div id="out-s3"></div>
+        </div>
+
+        <!-- 5. landed in S3 Vectors -->
+        <div class="card">
+          <div class="card-head"><h3>Landed in S3 Vectors</h3></div>
+          <dl class="dl" id="out-vec-index" style="margin-bottom:12px"></dl>
+          <div class="btn-row" id="out-vec-counts" style="margin-bottom:12px"></div>
+          <div class="callout info" style="margin-bottom:16px">
+            <svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-info"/></svg>
+            <span>Showing a sample of this run’s chunks from the index. The counts above come from the ingestion job and are the authoritative figures.</span>
+          </div>
+          <div class="grid-2" id="out-vec-chunks"></div>
+        </div>
+
+        <!-- 6. ticket outputs (only when a ticket export was uploaded) -->
+        <div class="card" id="out-tickets-card" hidden>
+          <div class="card-head"><h3>Ticket outputs</h3></div>
+          <h4 style="color:var(--muted);font-weight:500;font-size:14px;margin:0 0 8px">Intents</h4>
+          <div class="table-wrap" style="margin-bottom:16px">
+            <table>
+              <thead><tr><th>intent</th><th>volume</th><th></th></tr></thead>
+              <tbody id="out-intents"></tbody>
+            </table>
+          </div>
+          <h4 style="color:var(--muted);font-weight:500;font-size:14px;margin:0 0 8px">Coverage</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>intent</th><th>verdict</th></tr></thead>
+              <tbody id="out-coverage"></tbody>
+            </table>
+          </div>
+          <p class="lead" style="margin:12px 0 0">Drafted articles for any gaps landed in the <span class="mono">drafts/</span> folder above.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 5. Footer -->
+  <footer class="footer">
+    <div class="wrap">
+      <span>Aivar Innovations · demonstration pilot</span>
+      <span>Sample or masked data only</span>
+    </div>
+  </footer>
+
+  <script src="config.js" onerror="console.info('config.js not found — mock mode via ?mock=1 still works')"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

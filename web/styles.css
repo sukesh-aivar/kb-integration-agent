@@ -1,0 +1,473 @@
+/* styles.css — design tokens, components, layout.
+ * POC frontend for the KB Integration Agent. Colours are defined once as custom
+ * properties; never hard-code a colour elsewhere. Sampled palette (OPEN_QUESTIONS P1).
+ */
+
+/* ---------------------------------------------------------------- tokens --- */
+:root {
+  --blue:        #346EE7;
+  --blue-deep:   #2C60D0;
+  --blue-tint:   #E8EEFC;
+  --ink:         #131925;
+  --muted:       #4D5564;
+  --page:        #FCFCFD;
+  --surface:     #FFFFFF;
+  --alt:         #F4F4F8;
+  --border:      #E3E5EB;
+  --ok:          #15803D;  --ok-bg:     #E7F5EC;
+  --warn:        #B45309;  --warn-bg:   #FDF1E1;
+  --danger:      #B42318;  --danger-bg: #FCEAE8;
+  --radius-pill: 999px;    --radius-card: 12px;
+  --shadow: 0 1px 2px rgba(19,25,37,.04), 0 4px 14px rgba(19,25,37,.05);
+
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --maxw: 1120px;
+  --gutter: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --blue:        #4F82F0;
+    --blue-deep:   #3B6FE0;
+    --blue-tint:   #1C2A4F;
+    --ink:         #F2F4F8;
+    --muted:       #A8B0C0;
+    --page:        #0E1320;
+    --surface:     #151B2B;
+    --alt:         #1B2338;
+    --border:      #2A3246;
+    --ok:          #4ADE80;  --ok-bg:     #11291C;
+    --warn:        #F0B86E;  --warn-bg:   #2E2412;
+    --danger:      #F0837A;  --danger-bg: #2E1614;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.35);
+  }
+}
+
+/* ------------------------------------------------------------- base/reset -- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--page); /* explicit, so dark mode is never half-inverted */
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { color: var(--ink); font-weight: 500; letter-spacing: -0.02em; line-height: 1.25; margin: 0; }
+h1 { font-size: 34px; }
+h2 { font-size: 24px; }
+h3 { font-size: 17px; }
+p  { margin: 0 0 1em; }
+a  { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+svg { display: inline-block; vertical-align: middle; }
+
+/* visible focus ring everywhere (a11y section 6) */
+:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- layout -- */
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter); }
+/* 32px breathing room above every screen's content so headings never touch the
+   data banner (spec 2.6). Applies to upload/outputs whose headings are nested. */
+.screen { padding-top: 32px; padding-bottom: 64px; }
+.screen > h1 { margin-top: 0; }
+.lead { font-size: 16px; color: var(--muted); max-width: 60ch; }
+.stack-24 > * + * { margin-top: 24px; }
+
+/* Programmatically focused non-interactive headings (tabindex=-1) should not
+   draw a focus ring — the focus move is for screen-reader context only. */
+.no-outline:focus, .no-outline:focus-visible { outline: none; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------- buttons ---- */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: inherit; font-size: 15px; font-weight: 500;
+  padding: 12px 24px; border-radius: var(--radius-pill);
+  border: 1px solid transparent; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s, opacity .15s;
+}
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary   { background: var(--blue); color: #fff; }
+.btn-primary:hover:not(:disabled)   { background: var(--blue-deep); text-decoration: none; }
+.btn-secondary { background: var(--surface); color: var(--blue); border-color: var(--blue); }
+.btn-secondary:hover:not(:disabled) { background: var(--blue-tint); text-decoration: none; }
+.btn-ghost     { background: transparent; color: var(--muted); border-color: var(--border); }
+.btn-ghost:hover:not(:disabled)     { background: var(--alt); text-decoration: none; }
+.btn-small { padding: 6px 14px; font-size: 13px; }
+
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+/* -------------------------------------------------------------- cards ----- */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow); padding: 24px;
+}
+.card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+
+/* icon circle */
+.icon-circle {
+  flex: none; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--blue-tint); color: var(--blue-deep);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-circle.compact { width: 34px; height: 34px; }
+
+/* -------------------------------------------------------------- chips ----- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 11px; border-radius: var(--radius-pill);
+  font-size: 13px; font-weight: 500;
+  background: var(--alt); color: var(--muted);
+}
+.chip.ok     { background: var(--ok-bg);     color: var(--ok); }
+.chip.warn   { background: var(--warn-bg);   color: var(--warn); }
+.chip.danger { background: var(--danger-bg); color: var(--danger); }
+.chip.info   { background: var(--blue-tint); color: var(--blue-deep); }
+
+/* -------------------------------------------------------------- tables ---- */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-card); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th {
+  background: var(--alt); color: var(--muted); font-weight: 500; text-align: left;
+  padding: 10px 14px; white-space: nowrap;
+}
+tbody td { padding: 10px 14px; border-top: 1px solid var(--border); color: var(--ink); vertical-align: top; }
+
+/* -------------------------------------------------------- definition list - */
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 14px; margin: 0; }
+.dl dt { color: var(--muted); }
+.dl dd { color: var(--ink); margin: 0; }
+
+/* -------------------------------------------------------------- callout --- */
+.callout {
+  display: flex; gap: 12px; align-items: flex-start;
+  border-radius: 12px; padding: 14px 16px; font-size: 14px;
+  background: var(--blue-tint); color: var(--ink);
+}
+.callout .ico { flex: none; color: var(--blue-deep); margin-top: 2px; }
+.callout.info   { background: var(--blue-tint); } .callout.info .ico { color: var(--blue-deep); }
+.callout.warn   { background: var(--warn-bg); color: var(--ink); } .callout.warn .ico { color: var(--warn); }
+.callout.danger { background: var(--danger-bg); color: var(--ink); } .callout.danger .ico { color: var(--danger); }
+.callout.ok     { background: var(--ok-bg); color: var(--ink); } .callout.ok .ico { color: var(--ok); }
+
+/* ------------------------------------------------------------- progress --- */
+.progress {
+  height: 12px; border-radius: var(--radius-pill);
+  background: var(--border); overflow: hidden; /* darker track, visible at 0% */
+}
+.progress .fill {
+  height: 100%; width: 0; background: var(--blue);
+  border-radius: var(--radius-pill); transition: width .5s ease;
+}
+/* While running, always show a visible sliver so the stripes are seen even at 0%. */
+.progress .fill.running { min-width: 10%; }
+.progress .fill.ok     { background: var(--ok); min-width: 0; }
+.progress .fill.danger { background: var(--danger); }
+/* moving diagonal stripes while running */
+.progress .fill.running {
+  background-image: repeating-linear-gradient(
+    45deg, rgba(255,255,255,.22) 0 10px, rgba(255,255,255,0) 10px 20px);
+  background-size: 28px 28px;
+}
+
+/* ------------------------------------------------------- preformatted ----- */
+.pre {
+  background: var(--alt); border-radius: 8px; padding: 12px;
+  font-family: var(--mono); font-size: 13px;
+  white-space: pre-wrap; overflow-x: auto; color: var(--ink);
+}
+
+/* ========================================================= persistent chrome */
+.mockbar {
+  background: var(--warn-bg); color: var(--warn);
+  font-size: 13px; padding: 8px var(--gutter);
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.mockbar .controls { display: flex; gap: 12px; align-items: center; margin-left: auto; }
+.mockbar label { display: inline-flex; gap: 6px; align-items: center; color: var(--warn); }
+.mockbar select {
+  font: inherit; font-size: 13px; padding: 2px 6px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+
+.topbar {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  height: 68px; display: flex; align-items: center;
+}
+.topbar .wrap { display: flex; align-items: center; width: 100%; }
+.brand { display: flex; align-items: center; gap: 14px; }
+/* Wide wordmark logo (Ingram micro): constrain by height, let width follow the
+   ~5:1 aspect ratio. Transparent background, so it sits clean on light or dark. */
+.brand img { height: 26px; width: auto; max-width: 180px; object-fit: contain; display: block; }
+.brand .wordmark { font-size: 18px; font-weight: 500; color: var(--ink); letter-spacing: -0.02em; }
+.brand .rule { width: 1px; height: 26px; background: var(--border); }
+.brand .product { font-size: 18px; font-weight: 500; color: var(--ink); }
+.topbar .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+/* step indicator */
+.stepindicator { padding: 16px 0; }
+.stepindicator ol { list-style: none; display: flex; align-items: center; gap: 8px; margin: 0; padding: 0; }
+.stepindicator li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.stepindicator .num {
+  width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
+}
+.stepindicator li[aria-current="step"] { color: var(--ink); }
+.stepindicator li[aria-current="step"] .num { background: var(--blue); color: #fff; border-color: var(--blue); }
+/* completed steps in the indicator show a check (item 22) */
+.stepindicator li.done { color: var(--ink); }
+.stepindicator li.done .num { background: var(--ok); color: #fff; border-color: var(--ok); }
+.stepindicator .joiner { width: 32px; height: 1px; background: var(--border); }
+
+.data-banner {
+  background: var(--blue-tint); color: var(--ink);
+  font-size: 14px; padding: 10px var(--gutter);
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+}
+.data-banner .ico { color: var(--blue-deep); }
+
+.footer {
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 14px;
+  padding: 20px 0; margin-top: 40px;
+}
+.footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* ============================================================= sign-in ===== */
+/* Clip the full-bleed hero panel so it never creates a horizontal scrollbar. */
+#screen-signin { overflow-x: clip; }
+.hero { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; min-height: 440px; align-items: center; }
+@media (max-width: 860px) { .hero { grid-template-columns: 1fr; } }
+.hero h1 { font-size: clamp(30px, 4.2vw, 46px); margin-bottom: 20px; }
+.hero .lead { font-size: 19px; max-width: 34em; margin-bottom: 28px; }
+
+.hero-art { position: relative; min-height: 440px; }
+/* The blue panel bleeds to the RIGHT viewport edge like the customer's site.
+   Distance from the centred content column's right edge to the viewport edge is
+   half the leftover width plus the gutter; extend the panel's right inset by
+   that so it runs off the page. No right-side rounding (it is a full bleed). */
+.hero-panel {
+  position: absolute;
+  inset: 0 calc(-1 * (max(0px, (100vw - var(--maxw))) / 2 + var(--gutter))) 0 0;
+  background: var(--blue-deep);
+  clip-path: polygon(24% 0, 100% 0, 100% 100%, 0 100%);
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
+}
+.float-card {
+  position: absolute; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow); padding: 16px;
+}
+.float-card.big { top: 56px; left: 40px; width: 62%; }
+.float-card.small { bottom: 48px; right: 24px; width: 46%; }
+.float-card h4 { margin: 0 0 10px; font-size: 14px; font-weight: 500; color: var(--muted); }
+.mini-step { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); padding: 5px 0; }
+.mini-dot { width: 18px; height: 18px; border-radius: 50%; flex: none; border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center; }
+.mini-dot.done { background: var(--ok); border-color: var(--ok); color: #fff; }
+.mini-dot.run  { border-color: var(--blue); border-top-color: transparent; }
+.barchart { display: flex; align-items: flex-end; gap: 6px; height: 76px; }
+.barchart .bar { flex: 1; background: var(--blue); border-radius: 4px 4px 0 0; opacity: .85; }
+
+/* ============================================================= upload ====== */
+.dropzone {
+  border: 2px dashed var(--border); border-radius: 12px; padding: 28px;
+  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.drag { border-color: var(--blue); background: var(--blue-tint); }
+.dropzone .icon-circle { margin: 0 auto 10px; }
+/* On hover the zone background becomes --blue-tint, which is also the icon
+   circle's fill — so lift the circle to --surface on hover so it stays visible. */
+.dropzone:hover .icon-circle, .dropzone.drag .icon-circle { background: var(--surface); }
+.dropzone .types { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.limits-line { font-size: 14px; color: var(--muted); margin-top: 8px; }
+
+.filelist { list-style: none; margin: 16px 0 0; padding: 0; }
+.filerow {
+  display: flex; align-items: center; gap: 12px; padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.filerow .meta { flex: 1; min-width: 0; }
+.filerow .name { font-weight: 500; color: var(--ink); word-break: break-word; }
+.filerow .size { font-size: 13px; color: var(--muted); }
+.filerow .fileprog { height: 6px; margin-top: 6px; }
+.filerow .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.iconbtn {
+  background: transparent; border: none; cursor: pointer; color: var(--muted);
+  padding: 6px; border-radius: 8px; display: inline-flex;
+}
+.iconbtn:hover { background: var(--alt); color: var(--ink); }
+
+.err-list { margin-top: 12px; }
+.err-list .callout + .callout { margin-top: 8px; }
+
+.action-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* Sticky bottom action bar on the upload screen (item 15). */
+.action-bar {
+  position: sticky; bottom: 0; z-index: 20;
+  background: var(--surface); border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 14px rgba(19,25,37,.05);
+}
+.action-bar-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; padding: 14px var(--gutter);
+}
+
+/* ============================================================ progress ===== */
+.run-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.run-header .elapsed { text-align: right; }
+.run-header .elapsed .big { font-size: 28px; color: var(--ink); font-weight: 500; }
+.bar-caption { display: flex; justify-content: space-between; gap: 16px; font-size: 14px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+
+/* "right now" panel — square corners w/ single-sided border */
+.nowpanel {
+  background: var(--blue-tint); border-left: 4px solid var(--blue);
+  padding: 20px 24px; border-radius: 0;
+}
+.nowpanel .stepno { font-size: 14px; color: var(--muted); }
+.nowpanel .label { font-size: 22px; font-weight: 500; color: var(--ink); margin: 4px 0 8px; }
+.nowpanel .desc { font-size: 16px; color: var(--ink); margin: 0; }
+.nowpanel .insight { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--muted); margin-top: 10px; }
+.nowpanel .insight .ico { color: var(--blue-deep); flex: none; margin-top: 2px; }
+.nowpanel .next { font-size: 14px; color: var(--muted); margin-top: 12px; }
+.nowpanel .eta { font-size: 14px; color: var(--muted); margin-top: 8px; }
+.nowpanel.ok     { background: var(--ok-bg); border-left-color: var(--ok); }
+.nowpanel.danger { background: var(--danger-bg); border-left-color: var(--danger); }
+
+/* motion indicator inside the "right now" panel (item 9) — a pulsing dot so the
+   panel itself always shows movement, independent of the below-the-fold shimmer. */
+.now-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.now-pulse { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--blue); margin-top: 4px; }
+.nowpanel.ok .now-pulse { background: var(--ok); }
+.nowpanel.danger .now-pulse { display: none; }
+
+/* two-column live layout (item 10): single column by default, 2-col at >=1100px */
+.progress-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
+@media (min-width: 1100px) {
+  .progress-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+}
+
+/* collapsed skipped-steps line (item 11) */
+.skip-collapse { border-top: 1px solid var(--border); }
+.skip-collapse > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 12px 10px; font-size: 13px; color: var(--muted); font-style: italic;
+}
+.skip-collapse > summary::-webkit-details-marker { display: none; }
+.skip-collapse > summary .chev { transition: transform .15s; margin-left: auto; }
+.skip-collapse[open] > summary .chev { transform: rotate(90deg); }
+
+/* sticky mini status strip (item 12) */
+.mini-strip {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.mini-strip-inner { display: flex; align-items: center; gap: 16px; padding: 10px var(--gutter); }
+.mini-strip .mini-step { font-weight: 500; color: var(--ink); font-size: 14px; white-space: nowrap; }
+.mini-strip .mini-elapsed { color: var(--muted); font-size: 14px; }
+.mini-strip .mini-bar { flex: 1; height: 8px; }
+
+/* step rows */
+.steplist { list-style: none; margin: 0; padding: 0; }
+.steprow {
+  display: grid; grid-template-columns: 26px 1fr max-content; gap: 12px; align-items: start;
+  padding: 12px 10px; border-top: 1px solid var(--border); border-radius: 10px;
+}
+.steprow.running { background: var(--blue-tint); }
+.steprow .lab { font-weight: 500; color: var(--ink); }
+.steprow.skipped .lab { font-style: italic; color: var(--muted); font-weight: 400; }
+.steprow .sub { font-size: 13px; color: var(--muted); }
+.steprow .time { font-size: 13px; color: var(--muted); text-align: right; white-space: nowrap; }
+.shimmer { height: 4px; margin-top: 6px; border-radius: 2px; background: var(--alt); overflow: hidden; position: relative; }
+.shimmer::after {
+  content: ""; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--blue), transparent);
+}
+
+/* status dot */
+.dot { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: #fff; }
+.dot.waiting {}
+.dot.running { border-color: var(--blue); border-top-color: transparent; }
+.dot.done    { background: var(--ok); border-color: var(--ok); }
+.dot.failed  { background: var(--danger); border-color: var(--danger); }
+.dot.skipped { color: var(--muted); }
+
+/* activity feed */
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li { display: grid; grid-template-columns: 56px 1fr; gap: 12px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.feed li:first-child { border-top: none; }
+.feed .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed .msg { color: var(--ink); }
+
+/* ============================================================= outputs ===== */
+.outhead { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.outhead .meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.volbar { display: inline-block; height: 8px; background: var(--blue); border-radius: var(--radius-pill); vertical-align: middle; margin-right: 8px; }
+.s3group { margin-top: 12px; }
+.s3group h4 { font-size: 14px; font-weight: 500; color: var(--muted); margin: 16px 0 6px; font-family: var(--mono); }
+.s3row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.s3row .uri { font-family: var(--mono); font-size: 13px; color: var(--ink); word-break: break-all; flex: 1; min-width: 200px; }
+.s3row .sub { font-size: 13px; color: var(--muted); }
+.s3row .acts { display: flex; gap: 6px; margin-left: auto; }
+
+/* stage-marker disclosure (item 18) */
+.marker-disclosure { border-top: 1px solid var(--border); }
+.marker-disclosure > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; font-size: 13px; color: var(--muted);
+}
+.marker-disclosure > summary::-webkit-details-marker { display: none; }
+.marker-disclosure > summary .ico { transition: transform .15s; }
+.marker-disclosure[open] > summary .ico { transform: rotate(90deg); }
+.marker-disclosure .marker-list { padding-left: 8px; }
+.marker-row .uri { font-size: 12px; }
+.chunkcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px; }
+.chunkcard .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.chunkcard .body { font-size: 15px; color: var(--ink); margin: 8px 0; }
+details > summary { cursor: pointer; color: var(--blue); font-size: 14px; }
+details[open] > summary { margin-bottom: 8px; }
+
+/* quiet reconnecting chip, fixed-ish */
+.reconnect { position: sticky; top: 8px; }
+
+/* ---------------------------------------------------- reduced motion ------- */
+@media (prefers-reduced-motion: no-preference) {
+  .dot.running { animation: spin 1s linear infinite; }
+  .mini-dot.run { animation: spin 1s linear infinite; }
+  .progress .fill.running { animation: stripe 1s linear infinite; }
+  .shimmer::after { animation: sweep 1.4s ease-in-out infinite; }
+  .now-pulse { animation: pulse 1.4s ease-in-out infinite; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes stripe { to { background-position: 28px 0; } }
+@keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+/* under reduced motion the shimmer is a solid blue bar, stripes omitted (handled in markup/fallback) */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { background: var(--blue); }
+  .shimmer::after { display: none; }
+  .progress .fill.running { background-image: none; }
+  .dot.running { border-top-color: var(--blue); } /* static ring */
+  .now-pulse { opacity: .8; } /* static dot */
+}

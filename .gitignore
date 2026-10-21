@@ -22,3 +22,7 @@ drafts/
 runs/
 # Local test data (synthetic tickets / labels — never commit)
 testdata/
+# POC frontend deploy-time config (generated from stack outputs; never committed)
+web/config.js
+# macOS
+.DS_Store
