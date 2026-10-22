@@ -90,6 +90,14 @@ class AgentInput(BaseModel):
     options: Options = Field(default_factory=Options)
     reviewer_feedback: ReviewerFeedback | None = None  # drives a re-run
     resume_from: str | None = None  # stage name, for resumable execution
+    # --- console-deploy v2 additions (both optional; CLI/tests unaffected) ---
+    # Opaque owner label supplied by the backend (Cognito sub). Written into
+    # _started.json, manifest.json and the metadata sidecars beside run_id so the
+    # data carries its owner. The agent never derives or accepts it elsewhere.
+    owner_id: str | None = None
+    # Hard cap on pages routed to Bedrock Data Automation, enforced BEFORE any
+    # paid BDA call (spec 5.8). None = no cap (CLI default).
+    max_pages: int | None = None
 
 
 class AgentOutput(BaseModel):

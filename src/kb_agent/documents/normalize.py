@@ -35,22 +35,25 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def sidecar_payload(metadata: DocumentMetadata) -> dict:
+def sidecar_payload(metadata: DocumentMetadata, owner_id: str | None = None) -> dict:
     """Build the confirmed ``.metadata.json`` payload (Part A item 2).
 
-    All values are strings/bools per the KB metadata contract.
+    All values are strings/bools per the KB metadata contract. ``owner_id`` is
+    added beside ``run_id`` (spec v2 §5.7) so the data carries its owner; omitted
+    when not supplied (CLI path).
     """
-    return {
-        "metadataAttributes": {
-            "source": metadata.source,
-            "source_type": metadata.source_type.value,
-            "route": metadata.route.value,
-            "content_hash": metadata.content_hash,
-            "run_id": metadata.run_id,
-            "ingested_at": metadata.ingested_at.isoformat(),
-            "language": metadata.language or "unknown",
-        }
+    attrs = {
+        "source": metadata.source,
+        "source_type": metadata.source_type.value,
+        "route": metadata.route.value,
+        "content_hash": metadata.content_hash,
+        "run_id": metadata.run_id,
+        "ingested_at": metadata.ingested_at.isoformat(),
+        "language": metadata.language or "unknown",
     }
+    if owner_id:
+        attrs["owner_id"] = owner_id
+    return {"metadataAttributes": attrs}
 
 
 def normalize_documents(
@@ -60,6 +63,7 @@ def normalize_documents(
     store: ObjectStore,
     data_source_prefix: str,
     source_type: SourceType = SourceType.UPLOADED_DOC,
+    owner_id: str | None = None,
 ) -> list[NormalizedDocument]:
     """Deduplicate by content hash and write docs + sidecars to the KB prefix.
 
@@ -99,7 +103,7 @@ def normalize_documents(
         )
 
         store.put_text(doc_key, text)
-        store.put_text(sidecar_key, json.dumps(sidecar_payload(metadata), indent=2))
+        store.put_text(sidecar_key, json.dumps(sidecar_payload(metadata, owner_id), indent=2))
         results.append(NormalizedDocument(doc_key, sidecar_key, chash))
 
     logger.info("normalize_complete", unique=len(results), input=len(docs))
@@ -113,6 +117,7 @@ def normalize_raw_documents(
     store: ObjectStore,
     data_source_prefix: str,
     source_type: SourceType = SourceType.UPLOADED_DOC,
+    owner_id: str | None = None,
 ) -> list[NormalizedDocument]:
     """Path A (freq-test): write RAW document bytes to the KB prefix, not text.
 
@@ -148,7 +153,7 @@ def normalize_raw_documents(
         )
 
         store.put_bytes(doc_key, data)
-        store.put_text(sidecar_key, json.dumps(sidecar_payload(metadata), indent=2))
+        store.put_text(sidecar_key, json.dumps(sidecar_payload(metadata, owner_id), indent=2))
         results.append(NormalizedDocument(doc_key, sidecar_key, chash))
 
     logger.info("normalize_raw_complete", unique=len(results), input=len(docs))

@@ -208,3 +208,93 @@ would claim a check that did not happen. For the live build this requires the
 `skip_reason`** in a normal run (the UI already prefers the backend's skip set and
 only falls back to its own rules). Logged here as an agent-side change to make;
 the mock models the intended behaviour now.
+
+---
+
+## Console-deploy spec v2 — answered from code / to verify
+
+### Answered from code (Phase 1)
+
+- **Q8 (chunk count "1,736"):** NOT computed in the pipeline. It was a hard-coded demo
+  string in the old mock and a log line. Bedrock KB `get_ingestion_job` returns
+  **document-level** statistics (documents scanned / indexed / failed / modified), **not a
+  chunk count**. Decision: persist the document-level ingestion stats in `_state.json` and
+  leave `chunks_written: null` (the UI hides the chip). We do NOT estimate.
+- **Q10 (auth token):** `web/auth.js getToken()` returns the **access token**
+  (`web/auth.js` ~L84–L106). The backend needs the **ID token** (that is where `email` /
+  `cognito:groups` live). FLAGGED for the Phase-4 frontend change: `getToken()` must return
+  the id_token for API calls (or the API Gateway JWT authorizer must accept the access token
+  and the backend must not rely on email). Will reconcile in Phase 4.
+- **Q10 (mock event `t`):** `web/mock.js` emits event `t` as **whole seconds** since run
+  start (virtual clock). The backend `status` endpoint will use the same (whole seconds since
+  `started_at`). No frontend change needed for `t`.
+- **entrypoint server:** currently `wsgiref.simple_server.make_server` — **single-threaded**
+  (`src/kb_agent/entrypoint.py` ~L117–L121). Phase 1 replaces it with a threaded server.
+
+### Verification log (to confirm against live AWS docs — spec rule 8)
+
+| # | Item | Status |
+|---|------|--------|
+| V1 | AgentCore `/ping` health strings + casing (believed `Healthy` / `HealthyBusy`; agent returns `{"status":"healthy"}` today) and how idle timeout is measured with a background thread | OPEN — needs docs |
+| V2 | IAM resource ARN format for `bedrock-agentcore:InvokeAgentRuntime` (runtime ARN, possibly with endpoint sub-resource) | OPEN — needs docs |
+| V3 | S3 Vectors: is the reserved data-source-id metadata key filterable in a query? | OPEN — needs read-only test |
+| V4 | KB `dataDeletionPolicy` param name + whether a KB can be deleted while data sources exist + delete order + account KB quota | OPEN — needs docs / Service Quotas |
+| V5 | Presigned POST URL host form in this account (virtual-hosted vs path style) — drives CSP connect-src | OPEN — determined at deploy |
+| V6 | Cognito default email sending limit (cited ~50/day) | OPEN — needs docs |
+| V7 | S3 console object URL format for us-east-1 (outputs console_url) | OPEN — needs docs |
+| V8 | Bedrock `get_ingestion_job` `statistics` key names (assumed `numberOfDocumentsScanned` / `numberOfNewDocumentsIndexed` / `numberOfModifiedDocumentsIndexed` / `numberOfDocumentsDeleted` / `numberOfDocumentsFailed`) — `_map_ingestion_stats` tolerates missing keys (defaults 0) | OPEN — needs docs / live ingestion |
+
+### Phase 1 — Checkpoint 1 build record (console-deploy v2)
+- **Scope delivered:** agent is now asynchronous and self-reporting to S3 under
+  `runs/{run_id}/` (`_started` / `_events` / `_heartbeat` / `_state` / `vectors_sample` /
+  `_finished`). No AWS resource was created, changed or deleted by the agent — the image is
+  built locally only and the human performs the ECR push + runtime update.
+- **Tests:** full offline suite green — **158 passed** (`.venv/bin/python -m pytest -q`),
+  including the 5 async-contract tests (`test_entrypoint_contract.py`) and the 10 new §5.10
+  run-state tests (`test_runstate.py`). `ruff check` clean on all changed files;
+  `mypy src/kb_agent` clean (48 files).
+- **Image:** `kb-integration-agent:v3` built ARM64 single-arch
+  (`docker buildx build --platform linux/arm64 --provenance=false --sbom=false
+  -t kb-integration-agent:v3 --load .`), loaded locally (NOT pushed). Verified:
+  `arch=arm64 os=linux` (~318 MB); in-container `kb_agent.entrypoint` import OK; a running
+  container answered `GET /ping` → `200 {"status":"Healthy","run_id":null}`.
+- **Next (human):** tag + push `:v3` to ECR, then update the AgentCore runtime to the new
+  image. `scripts/update_runtime.py` previews the change (dry-run default) and prints the
+  console steps; `--apply` performs it (human only).
+
+### Phase 1 — live verification on the deployed `:v3` runtime (2026-10-22)
+Runtime `kb_integration_agent-LQ8ettAIsg` updated v2 → v3 (role + 9 env vars + PUBLIC/HTTP
+carried over unchanged), status returned to **READY**. Async smoke run
+`smoke-v3-1792648824` (input `s3://kb-integration-agent-test/sample-doc-runtime.pdf`, no
+tickets, no question set):
+- `POST /invocations` → `202 {status: accepted}` immediately; S3 run-state streamed as
+  expected; `_finished.json` → `status: needs_review`, `error: null`, 20.87s.
+- **V1 (ping strings) — effectively RESOLVED:** the runtime stayed READY and served the
+  invocation to completion with the new `Healthy`/`HealthyBusy` strings, so AgentCore's
+  health check accepts them. (AgentCore proxies `/ping` internally; not probed directly.)
+- **V8 (ingestion stat keys) — RESOLVED:** `_state.json` reported
+  `ingestion: {scanned:1, indexed:1, modified:0, failed:0, chunks_written:null}` from a real
+  `get_ingestion_job`, confirming the assumed `numberOf*` key names. `chunks_written` null by
+  design.
+- **Known Phase-1 placeholder (expected):** `vectors_sample.json` =
+  `{"chunks":[],"error":"unavailable","method":"unimplemented"}` — the real S3 Vectors
+  chunk-sample query is deferred to a later phase; it never fails the run (spec §5.6).
+- Skip set correct for a docs-only run (8 ticket/join stages "No ticket export uploaded";
+  `kb_retrieve` "Runs only when a question set is supplied"). Red pill routed the PDF to BDA
+  (rule 8, 50 pages, cache hit), KB created + ingested 1 document; report + manifest written.
+
+
+### Bug fix — BDA input URI dropped the bucket name (:v4, 2026-10-22)
+Symptom: a real uploaded doc (`simple-finance-document.pdf`) failed at `normalize_docs`
+with `ValidationException ... InvokeDataAutomationAsync ... Unable to read file from
+given S3 location`. Root cause: `pipeline._stage_normalize_docs` reconstructed the BDA
+input uri as `f"s3://{key}"` from the BARE key (bucket already stripped), yielding
+`s3://uploads/<run>/docs/<file>` — so BDA tried to read a bucket named `uploads`.
+Earlier smoke runs used `sample-doc-runtime.pdf`, which was a BDA **cache hit**, so the
+malformed uri was never exercised; the first uncached BDA call exposed it.
+Fix: carry the caller's ORIGINAL full `s3://bucket/key` uri through to the BDA call
+(new `_store_uri()` helper builds it from the store's bucket for bare-key/CLI inputs;
+never `f"s3://{key}"`). Added regression test
+`tests/unit/test_runstate.py::test_bda_input_uri_keeps_the_bucket_name`. Rebuilt
+`:v4` (ARM64), pushed to ECR, updated runtime; re-ran the exact failing input →
+`needs_review`, BDA parsed 1 page. 158+1 tests pass, ruff+mypy clean.

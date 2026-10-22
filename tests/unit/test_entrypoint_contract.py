@@ -1,20 +1,18 @@
-"""Contract test for the AgentCore HTTP app (spec 7.6, Part A item 4).
+"""Contract test for the AgentCore HTTP app (console-deploy v2 §5.1, §5.10).
 
-Exercises the exact Runtime contract - GET /ping and POST /invocations - using a
-WSGI test client against the fake-mode app, so it runs offline. This is the
-"stub orchestrator" posting the payload the real orchestrator will send and
-asserting the response shape.
+Exercises the Runtime contract - GET /ping and POST /invocations - using a WSGI
+test client against the fake-mode app, so it runs offline. The v2 contract is
+ASYNC: /invocations returns {"status":"accepted"} within ~1s and the pipeline runs
+on a background thread; a synchronous run is still available via {"wait": true}.
 """
 
 from __future__ import annotations
 
 import io
 import json
-from pathlib import Path
+import time
 
-from kb_agent.entrypoint import create_app
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from kb_agent.entrypoint import PING_HEALTHY, create_app
 
 
 def _call(app, method: str, path: str, body: bytes = b"") -> tuple[str, dict]:
@@ -34,26 +32,44 @@ def _call(app, method: str, path: str, body: bytes = b"") -> tuple[str, dict]:
     return captured["status"], payload
 
 
-def test_ping_returns_healthy() -> None:
+def _wait_idle(app, timeout_s: float = 10.0) -> None:
+    """Poll /ping until the background run finishes (healthy again)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        _s, b = _call(app, "GET", "/ping")
+        if b["status"] == PING_HEALTHY:
+            return
+        time.sleep(0.05)
+
+
+def test_ping_healthy_when_idle() -> None:
     app = create_app(mode="fake")
     status, body = _call(app, "GET", "/ping")
     assert status.startswith("200")
-    assert body["status"] == "healthy"
+    assert body["status"] == PING_HEALTHY
 
 
-def test_invocations_runs_pipeline_and_returns_contract_shape() -> None:
+def test_invocations_async_returns_accepted_fast() -> None:
     app = create_app(mode="fake")
+    t0 = time.monotonic()
+    status, body = _call(app, "POST", "/invocations",
+                         json.dumps({"run_id": "contract-async-1"}).encode())
+    elapsed = time.monotonic() - t0
+    assert status.startswith("202")
+    assert body["run_id"] == "contract-async-1"
+    assert body["status"] in {"accepted", "already_running"}
+    assert elapsed < 2.0, "accepted response must return quickly"
+    _wait_idle(app)
 
-    # Minimal payload: no tickets/docs. The pipeline still completes and returns
-    # the AgentOutput contract shape (spec 8).
-    payload = json.dumps({"run_id": "contract-1"}).encode()
+
+def test_invocations_wait_true_is_synchronous_full_shape() -> None:
+    app = create_app(mode="fake")
+    payload = json.dumps({"run_id": "contract-sync-1", "wait": True}).encode()
     status, body = _call(app, "POST", "/invocations", payload)
-
     assert status.startswith("200")
-    # AgentOutput contract fields (spec 8).
     for key in ("run_id", "status", "stage", "artifacts", "metrics"):
         assert key in body, f"missing contract field: {key}"
-    assert body["run_id"] == "contract-1"
+    assert body["run_id"] == "contract-sync-1"
     assert body["status"] in {"completed", "running", "needs_review", "failed"}
 
 
@@ -68,3 +84,4 @@ def test_unknown_path_returns_404() -> None:
     app = create_app(mode="fake")
     status, _ = _call(app, "GET", "/nope")
     assert status.startswith("404")
+    _wait_idle(app)

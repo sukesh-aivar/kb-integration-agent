@@ -30,6 +30,15 @@ class KnowledgeBaseStage:
     def kb_id(self) -> str | None:
         return self._kb_id
 
+    @property
+    def data_source_id(self) -> str | None:
+        """The S3 data source id, needed for the chunk sample (spec v2 §5.6).
+
+        Only the real client tracks this; fakes may not expose it. Returns None
+        when the underlying client does not carry one.
+        """
+        return getattr(self._client, "data_source_id", None)
+
     def create(self, name: str, data_source_prefix: str) -> str:
         """Create (or reuse) the KB with the configured chunking strategy."""
         strategy = self._config.knowledge_base.chunking_strategy
@@ -37,14 +46,31 @@ class KnowledgeBaseStage:
         logger.info("kb_created", kb_id=self._kb_id, chunking=strategy)
         return self._kb_id
 
-    def ingest(self) -> str:
-        """Start ingestion and wait for completion (polled; Part A item 2)."""
+    def ingest(self) -> dict | str:
+        """Start ingestion and wait for completion (polled; Part A item 2).
+
+        Returns the client's document-level ingestion statistics dict (spec v2
+        §5.5) when the client exposes them (``last_ingestion_stats``); otherwise
+        falls back to the bare status string (keeps fakes/older clients working).
+        """
         if self._kb_id is None:
             raise RuntimeError("create() must run before ingest()")
         job_id = self._client.start_ingestion(self._kb_id)
         status = self._client.wait_for_ingestion(self._kb_id, job_id)
         logger.info("kb_ingested", kb_id=self._kb_id, job_id=job_id, status=status)
-        return status
+        stats = getattr(self._client, "last_ingestion_stats", None)
+        return stats if isinstance(stats, dict) else status
+
+    def sample_chunks(self, run_id: str, max_chunks: int = 5) -> dict:
+        """Precompute a small chunk sample for this run (spec v2 §5.6).
+
+        Delegates to the client when it supports sampling; otherwise returns an
+        empty-but-valid sample. A missing sample must never fail the run.
+        """
+        sampler = getattr(self._client, "sample_chunks", None)
+        if callable(sampler):
+            return sampler(run_id, max_chunks)
+        return {"chunks": [], "error": "unavailable"}
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedPassage]:
         """Retrieve the top-k passages for a query."""

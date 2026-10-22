@@ -26,3 +26,7 @@ testdata/
 web/config.js
 # macOS
 .DS_Store
+# Deployment facts (contains account IDs and ARNs; never commit)
+docs/deployment-facts.md
+# Backend Lambda build artifacts (regenerated from source; never commit)
+deploy/backend/*.zip

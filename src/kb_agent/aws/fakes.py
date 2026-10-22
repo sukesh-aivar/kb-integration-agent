@@ -254,10 +254,21 @@ class FakeKnowledgeBase:
         self._store = store
         self._passages: dict[str, list[RetrievedPassage]] = defaultdict(list)
         self._kbs: dict[str, str] = {}
+        self._data_source_id: str | None = None
+        self._last_ingestion_stats: dict | None = None
+
+    @property
+    def data_source_id(self) -> str | None:
+        return self._data_source_id
+
+    @property
+    def last_ingestion_stats(self) -> dict | None:
+        return self._last_ingestion_stats
 
     def create(self, name: str, data_source_prefix: str, chunking_strategy: str) -> str:
         kb_id = f"fake-kb-{name}"
         self._kbs[kb_id] = data_source_prefix
+        self._data_source_id = f"fake-ds-{name}"
         return kb_id
 
     def start_ingestion(self, kb_id: str) -> str:
@@ -277,7 +288,30 @@ class FakeKnowledgeBase:
         return f"fake-job-{kb_id}"
 
     def wait_for_ingestion(self, kb_id: str, job_id: str, timeout_s: float = 1800.0) -> str:
+        # Record deterministic document-level stats mirroring the real client's
+        # last_ingestion_stats shape (spec v2 §5.5). No chunk count exists.
+        indexed = len(self._passages.get(kb_id, []))
+        self._last_ingestion_stats = {
+            "scanned": indexed,
+            "indexed": indexed,
+            "modified": 0,
+            "deleted": 0,
+            "failed": 0,
+        }
         return "COMPLETE"
+
+    def sample_chunks(self, run_id: str, max_chunks: int = 5) -> dict:
+        # Return a small sample of ingested passages for this run's KB. Post-filter
+        # on run_id (the data-source prefix embeds it) so cross-run leakage cannot
+        # happen even in fake mode (spec v2 §5.6).
+        chunks: list[dict] = []
+        for kb_id, prefix in self._kbs.items():
+            if run_id not in prefix:
+                continue
+            for p in self._passages.get(kb_id, [])[:max_chunks]:
+                chunks.append({"source_id": p.source_id, "text": p.text[:280]})
+            break
+        return {"chunks": chunks[:max_chunks]}
 
     def retrieve(self, kb_id: str, query: str, top_k: int) -> list[RetrievedPassage]:
         # Score = overlap coefficient on CONTENT words: fraction of the query's

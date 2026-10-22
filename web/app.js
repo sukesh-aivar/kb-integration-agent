@@ -45,6 +45,7 @@ async function init() {
   wireUpload();
   wireOutputsNav();
   wireProgressChrome();
+  wireVisibilityRefresh();
 
   if (MOCK) {
     setupMockBar();
@@ -172,6 +173,25 @@ async function beginRun(runId) {
 function runIdFromHash() {
   const m = /(?:^|[#&])run=([^&]+)/.exec(window.location.hash || "");
   return m ? decodeURIComponent(m[1]) : null;
+}
+
+// Browsers aggressively THROTTLE setTimeout/setInterval in background/inactive
+// tabs (down to ~1/minute). If the user clicks Start then switches tabs, the
+// poll loop stalls and they miss the whole run, seeing only the final state when
+// a throttled tick finally fires. When the tab becomes visible again, poll
+// immediately so the UI catches up at once (the backend keeps the full event
+// history, so a single poll returns all progress).
+function wireVisibilityRefresh() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const onProgress = !ui.el("screen-progress").hidden;
+    const active = state.status && state.status.status !== "complete" && state.status.status !== "failed";
+    if (onProgress && state.runId && (active || !state.status)) {
+      // Cancel the (throttled) pending timer and poll right now.
+      if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+      pollOnce();
+    }
+  });
 }
 
 // ---------------------------------------------------------- polling loop ----

@@ -80,12 +80,18 @@ export function currentEmail() {
   } catch { return null; }
 }
 
-// Return a usable access token, refreshing silently if expired.
+// Return a usable ID token, refreshing silently if expired.
+//
+// The API Gateway HTTP API JWT authorizer validates the token's `aud` claim
+// against the Cognito app client id. ONLY the ID token carries `aud` = client id
+// (the access token carries `client_id` and no `aud`), so we MUST send the ID
+// token on API calls (console-deploy v2 Q10). The ID token is also where `email`
+// and `sub` live, which the backend uses for per-user ownership.
 export async function getToken() {
   let t = loadTokens();
   if (!t) return null;
   const ageSec = (Date.now() - (t.obtained_at || 0)) / 1000;
-  if (t.access_token && ageSec < (t.expires_in || 3600) - 60) return t.access_token;
+  if (t.id_token && ageSec < (t.expires_in || 3600) - 60) return t.id_token;
   if (t.refresh_token) {
     const res = await fetch(`${cfg.COGNITO_DOMAIN}/oauth2/token`, {
       method: "POST",
@@ -98,12 +104,14 @@ export async function getToken() {
     });
     if (res.ok) {
       const fresh = await res.json();
+      // A refresh response returns a new id_token + access_token but NOT a new
+      // refresh_token; keep the existing one.
       t = { ...t, ...fresh, obtained_at: Date.now() };
       localStorage.setItem(STORE_KEY, JSON.stringify(t));
-      return t.access_token;
+      return t.id_token;
     }
   }
-  return t.access_token || null; // let the caller get a 401 and prompt re-sign-in
+  return t.id_token || null; // let the caller get a 401 and prompt re-sign-in
 }
 
 export function signOut() {

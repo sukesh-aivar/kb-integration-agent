@@ -39,6 +39,7 @@ from kb_agent.join.report import build_report, render_markdown
 from kb_agent.logging_setup import bind_run_id, get_logger
 from kb_agent.models import Route, SourceType
 from kb_agent.obs.audit import RunManifest, library_versions
+from kb_agent.obs.runstate import RunStateWriter, compute_skip_set
 from kb_agent.obs.timing import StageTimer
 from kb_agent.obs.tracing import stage_span
 from kb_agent.review.state import ReviewRegistry
@@ -69,6 +70,72 @@ STAGE_ORDER = [
 ]
 
 
+# Reader-facing stage labels (match the frontend STEP labels). Used only for the
+# run-state event text; stage IDs remain the canonical identifiers.
+STAGE_LABELS = {
+    "load_tickets": "Reading the ticket export",
+    "adapt_tickets": "Mapping ticket fields",
+    "clean_tickets": "Cleaning and de-duplicating",
+    "embed_texts": "Embedding ticket text",
+    "intent_cluster": "Discovering intents",
+    "name_clusters": "Naming intents",
+    "normalize_docs": "Reading and parsing documents",
+    "kb_create": "Creating the knowledge base",
+    "kb_ingest": "Indexing content",
+    "kb_retrieve": "Checking retrieval",
+    "coverage_check": "Checking coverage",
+    "draft_article": "Drafting articles",
+    "write_report": "Writing the report",
+}
+
+
+def _utcnow_iso() -> str:
+    from datetime import UTC, datetime
+    return datetime.now(UTC).isoformat()
+
+
+def _store_uri(store: Any, key: str) -> str:
+    """Build a full ``s3://bucket/key`` URI for a bare key via the store.
+
+    Both the real S3 store and the fake expose a private ``_uri(key)`` that
+    prepends their bucket. We use it defensively: if a store does not expose it
+    (or it raises), fall back to the bare key so offline/fake paths still work.
+    Never build ``f"s3://{key}"`` directly — that drops the bucket name and makes
+    Bedrock Data Automation read from a bucket named after the first key segment.
+    """
+    uri_fn = getattr(store, "_uri", None)
+    if callable(uri_fn):
+        try:
+            return uri_fn(key)
+        except Exception:  # noqa: BLE001 - defensive; fall back to the key
+            pass
+    return key
+
+
+def _error_kind(exc: Exception) -> str:
+    """Map an exception to a stable error kind for _finished.json (spec v2 §5.3)."""
+    from kb_agent.exceptions import (
+        IngestionError,
+        PageCapExceededError,
+        ParsingError,
+        ValidationError,
+    )
+    if isinstance(exc, PageCapExceededError):
+        return "page_cap_exceeded"
+    if isinstance(exc, ValidationError):
+        return "validation_error"
+    if isinstance(exc, ParsingError):
+        return "parsing_error"
+    if isinstance(exc, IngestionError):
+        return "ingestion_error"
+    return "agent_error"  # catch-all
+
+
+def _plain_error(exc: Exception) -> str:
+    """A plain-English message with no stack trace (spec v2 §5.3)."""
+    return str(exc) or exc.__class__.__name__
+
+
 @dataclass
 class PipelineState:
     """Mutable state threaded through the stages of one run."""
@@ -91,6 +158,7 @@ class Pipeline:
         self._clients = clients
         self._config = config
         self._force_bda = force_bda  # force every document down the BDA route (test)
+        self._rs: RunStateWriter | None = None  # set per run() when enabled
 
     # --- resumability helpers ------------------------------------------------
 
@@ -105,8 +173,20 @@ class Pipeline:
 
     # --- public entry points -------------------------------------------------
 
-    def run(self, agent_input: AgentInput, golden: list[dict] | None = None) -> AgentOutput:
-        """Run the full pipeline synchronously (local testing path; spec 3)."""
+    def run(
+        self,
+        agent_input: AgentInput,
+        golden: list[dict] | None = None,
+        *,
+        emit_runstate: bool = False,
+    ) -> AgentOutput:
+        """Run the full pipeline synchronously (spec 3).
+
+        ``emit_runstate=True`` additionally writes the live progress files the
+        backend reads (``_started/_events/_heartbeat/_state/_finished``, spec v2
+        §5.3). Default False keeps the CLI and all existing tests byte-for-byte
+        identical (no extra S3 writes).
+        """
         bind_run_id(agent_input.run_id)
         manifest = RunManifest(
             run_id=agent_input.run_id,
@@ -115,6 +195,30 @@ class Pipeline:
         )
         timer = StageTimer()
         state = PipelineState()
+        state._owner_id = agent_input.owner_id  # type: ignore[attr-defined]
+        state._max_pages = agent_input.max_pages  # type: ignore[attr-defined]
+
+        # run-state writer (opt-in). Compute the skip set up front from inputs.
+        rs: RunStateWriter | None = None
+        skipped = compute_skip_set(
+            has_tickets=bool(agent_input.ticket_uri),
+            has_golden=bool(golden),
+        )
+        if emit_runstate:
+            rs = RunStateWriter(self._clients.store, agent_input.run_id)
+            rs.started(
+                stage_order=list(STAGE_ORDER),
+                skipped=skipped,
+                inputs={
+                    "documents": [{"uri": u} for u in agent_input.document_uris],
+                    "ticket": agent_input.ticket_uri,
+                },
+                owner_id=agent_input.owner_id,
+            )
+            for stg, reason in skipped.items():
+                rs.stage_skipped(stg, reason)
+            rs.start_heartbeat()
+        self._rs = rs
 
         start_index = 0
         if agent_input.resume_from:
@@ -122,32 +226,83 @@ class Pipeline:
                 raise ValueError(f"unknown resume_from stage: {agent_input.resume_from}")
             start_index = STAGE_ORDER.index(agent_input.resume_from)
 
+        stage = STAGE_ORDER[start_index]  # default so the except clause has a value
         try:
             for stage in STAGE_ORDER[start_index:]:
                 if self._is_done(agent_input.run_id, stage) and not agent_input.resume_from:
                     logger.info("stage_skip_completed", stage=stage)
                     manifest.record_stage(stage, "skipped")
                     continue
+                if stage in skipped:
+                    manifest.record_stage(stage, "skipped", output=skipped[stage])
+                    continue
+                if rs:
+                    rs.set_stage(stage)
+                    rs.stage_started(stage, STAGE_LABELS.get(stage, stage))
                 with timer.measure(stage), stage_span(stage, agent_input.run_id):
                     self._run_stage(stage, agent_input, state, manifest, golden)
                 self._mark_done(agent_input.run_id, stage)
                 manifest.record_stage(stage, "completed", timer.durations.get(stage))
+                if rs:
+                    rs.stage_done(stage, STAGE_LABELS.get(stage, stage),
+                                  data={"duration_sec": round(timer.durations.get(stage, 0.0), 2)})
         except Exception as exc:  # noqa: BLE001 - record then re-raise as failed output
             logger.error("pipeline_failed", stage=stage, error=str(exc))
             manifest.errors.append({"stage": stage, "error": str(exc)})
             manifest.finish()
             self._write_manifest(agent_input.run_id, manifest)
+            if rs:
+                rs.stage_failed(stage, _plain_error(exc))
+                rs.stop_heartbeat()
+                rs.finished({
+                    "status": "failed",
+                    "ended_at": _utcnow_iso(),
+                    "elapsed_seconds": round(sum(timer.durations.values()), 2),
+                    "failing_stage": stage,
+                    "error": {"kind": _error_kind(exc), "message": _plain_error(exc)},
+                })
             return AgentOutput(
                 run_id=agent_input.run_id, status="failed", stage=stage,
                 metrics=state.metrics,
                 errors=[{"stage": stage, "kind": type(exc).__name__, "message": str(exc)}],  # type: ignore[list-item]
             )
+        except BaseException as exc:  # noqa: BLE001 - e.g. KeyboardInterrupt/SystemExit
+            # A non-Exception interrupt (spec v2 §5.1 item 4): still write a
+            # terminal _finished.json so the backend never sees a run hang
+            # "running" forever, then RE-RAISE so the caller/thread still sees it.
+            logger.error("pipeline_interrupted", stage=stage, error=repr(exc))
+            if rs:
+                try:
+                    rs.stage_failed(stage, "The run stopped unexpectedly.")
+                    rs.stop_heartbeat()
+                    rs.finished({
+                        "status": "failed",
+                        "ended_at": _utcnow_iso(),
+                        "elapsed_seconds": round(sum(timer.durations.values()), 2),
+                        "failing_stage": stage,
+                        "error": {"kind": "agent_error",
+                                  "message": "The run stopped unexpectedly."},
+                    })
+                except Exception:  # noqa: BLE001 - never mask the original interrupt
+                    logger.error("interrupt_finished_write_failed", stage=stage)
+            raise
+        finally:
+            self._rs = None
 
         state.metrics.stage_durations_sec = timer.durations
         artifacts = self._finalise(agent_input.run_id, state, manifest)
         manifest.metrics = state.metrics.model_dump(mode="json")
         manifest.finish()
         self._write_manifest(agent_input.run_id, manifest)
+        if rs:
+            rs.stop_heartbeat()
+            rs.finished({
+                "status": "needs_review",
+                "ended_at": _utcnow_iso(),
+                "elapsed_seconds": round(sum(timer.durations.values()), 2),
+                "failing_stage": None,
+                "error": None,
+            })
 
         return AgentOutput(
             run_id=agent_input.run_id,
@@ -280,12 +435,21 @@ class Pipeline:
         # ``force_bda`` (from the CLI) forces the BDA route on every document for
         # testing, regardless of what the router decides.
         prefix = f"runs/{ai.run_id}/kb-docs"
-        raw_docs: list[tuple[str, bytes, Route]] = []
-        md_docs: list[tuple[str, str, Route]] = []
-        bda_proc = None
 
+        # --- Pass 1: route every document (NO paid BDA call yet) so the page cap
+        # can be enforced before the first Data Automation invocation (spec v2 §5.8).
+        # Each entry: (name, key, src_uri, data, route, decision, page_count)
+        # src_uri is the ORIGINAL full s3://bucket/key the caller supplied (when it
+        # was one), used verbatim for the BDA call — reconstructing it from the
+        # bare key dropped the bucket name and made BDA read s3://uploads/... .
+        routed: list[tuple[str, str, str, bytes, Route, Any, int]] = []
         for uri in ai.document_uris:
             key = uri.split("/", 3)[-1] if uri.startswith("s3://") else uri
+            # Full s3 uri for BDA: keep the caller's uri if it was already one;
+            # otherwise build it from the store's bucket (never f"s3://{key}",
+            # which drops the bucket). _store_uri falls back to the bare key if the
+            # store exposes no bucket (keeps fakes/tests working).
+            src_uri = uri if uri.startswith("s3://") else _store_uri(self._clients.store, key)
             name = key.rsplit("/", 1)[-1]
             if not is_stageable_document(name):
                 logger.info("skip_non_content_document", name=name)
@@ -295,7 +459,6 @@ class Pipeline:
             except KeyError:
                 logger.info("document_not_found", key=key)
                 continue
-
             features = extract_features(name, data)
             decision = route_document(features, self._config)
             route = Route.BDA if self._force_bda else decision.route
@@ -304,7 +467,40 @@ class Pipeline:
                  "reason": decision.reason, "forced": self._force_bda}
             )
             logger.info("route_document", file=name, route=route.value, rule_id=decision.rule_id)
+            if self._rs and route is not Route.REJECT:
+                dest = "Bedrock Data Automation" if route is Route.BDA else "the default parser"
+                self._rs.info(
+                    f"Routing {name} to {dest} (rule {decision.rule_id}: {decision.reason})",
+                    stage="normalize_docs",
+                )
+            routed.append(
+                (name, key, src_uri, data, route, decision, int(features.page_count or 0))
+            )
 
+        # Page cap: sum pages of BDA-routed files; fail BEFORE any paid call.
+        max_pages = getattr(state, "_max_pages", None)
+        if max_pages is not None:
+            bda_pages = sum(
+                pc for (_n, _k, _u, _d, route, _dec, pc) in routed if route is Route.BDA
+            )
+            if bda_pages > max_pages:
+                if self._rs:
+                    self._rs.stage_failed(
+                        "normalize_docs",
+                        f"Needs ~{bda_pages} scanned pages; limit is {max_pages}.",
+                    )
+                from kb_agent.exceptions import PageCapExceededError
+                raise PageCapExceededError(bda_pages, max_pages)
+
+        # --- Pass 2: now run BDA / default parsing.
+        raw_docs: list[tuple[str, bytes, Route]] = []
+        md_docs: list[tuple[str, str, Route]] = []
+        bda_proc = None
+        routing_state: list[dict[str, Any]] = []
+        for name, _key, src_uri, data, route, decision, pages in routed:
+            routing_state.append({"file": name, "size": len(data), "pages": pages,
+                                  "route": "bda" if route is Route.BDA else "default",
+                                  "rule_id": decision.rule_id, "reason": decision.reason})
             if route is Route.REJECT:
                 logger.info("document_rejected", file=name, reason=decision.reason)
                 continue
@@ -314,10 +510,16 @@ class Pipeline:
                         self._clients.bda, self._clients.store,
                         page_cap=self._config.cost.bda_page_cap_per_run,
                     )
-                input_uri = uri if uri.startswith("s3://") else f"s3://{key}"
-                result = bda_proc.process(name, data, input_uri)
+                result = bda_proc.process(name, data, src_uri)
                 logger.info("bda_processed", file=name, pages=result.pages_processed,
                             cached=result.cached)
+                if self._rs:
+                    if result.cached:
+                        self._rs.info(f"{name} was parsed before, so the cached result was reused",
+                                      stage="normalize_docs")
+                    else:
+                        self._rs.info(f"Parsed {result.pages_processed} pages from {name}",
+                                      stage="normalize_docs")
                 md_docs.append((name, result.markdown, route))
             else:  # DEFAULT
                 raw_docs.append((name, data, route))
@@ -327,14 +529,25 @@ class Pipeline:
             normalized += normalize_raw_documents(
                 raw_docs, run_id=ai.run_id, store=self._clients.store,
                 data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
+                owner_id=getattr(state, "_owner_id", None),
             )
         if md_docs:
             normalized += normalize_documents(
                 md_docs, run_id=ai.run_id, store=self._clients.store,
                 data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
+                owner_id=getattr(state, "_owner_id", None),
             )
         state.normalized_docs = normalized
         state.metrics.document_count = len(state.normalized_docs)
+        state._routing = routing_state  # type: ignore[attr-defined]
+        if self._rs:
+            n_bda = sum(1 for r in routing_state if r["route"] == "bda")
+            n_def = len(routing_state) - n_bda
+            self._rs.info(
+                f"Parsed {len(routing_state)} file{'s' if len(routing_state) != 1 else ''}: "
+                f"{n_bda} with Bedrock Data Automation, {n_def} with the default parser",
+                stage="normalize_docs",
+            )
 
     def _stage_kb_create(
         self,
@@ -346,6 +559,11 @@ class Pipeline:
         stage = KnowledgeBaseStage(self._clients.knowledge_base, self._config)
         stage.create(f"kb-{ai.run_id}", f"runs/{ai.run_id}/kb-docs")
         state.kb_stage = stage
+        # Write kb_id / data_source_id into _state.json as soon as kb_create ends
+        # (spec v2 §5.5) — the outputs screen needs them early.
+        if self._rs:
+            self._rs.info("Knowledge base created", stage="kb_create")
+            self._write_state(state)
 
     def _stage_kb_ingest(
         self,
@@ -354,8 +572,21 @@ class Pipeline:
         manifest: RunManifest,
         golden: list[dict] | None,
     ) -> None:
-        if state.kb_stage:
-            state.kb_stage.ingest()
+        if not state.kb_stage:
+            return
+        if self._rs:
+            self._rs.info("Ingestion started", stage="kb_ingest")
+        stats = state.kb_stage.ingest()  # may return a dict of stats or a status str
+        if self._rs:
+            indexed = None
+            if isinstance(stats, dict):
+                indexed = stats.get("indexed")
+            state._ingestion = stats if isinstance(stats, dict) else {}  # type: ignore[attr-defined]
+            n = indexed if indexed is not None else state.metrics.document_count
+            self._rs.info(f"Ingestion complete: {n} document{'s' if n != 1 else ''} indexed",
+                          stage="kb_ingest")
+            self._write_state(state)
+            self._write_vectors_sample(ai, state)
 
     def _stage_kb_retrieve(
         self,
@@ -463,6 +694,60 @@ class Pipeline:
         self._clients.store.put_text(
             f"runs/{run_id}/manifest.json", manifest.model_dump_json(indent=2)
         )
+
+    # --- run-state helpers (only when self._rs is set) -----------------------
+
+    def _write_state(self, state: PipelineState) -> None:
+        """Overwrite runs/{run_id}/_state.json at a milestone (spec v2 §5.5)."""
+        if not self._rs:
+            return
+        kb = state.kb_stage
+        ingestion = getattr(state, "_ingestion", {}) or {}
+        payload = {
+            "knowledge_base_id": getattr(kb, "kb_id", None) if kb else None,
+            "data_source_id": getattr(kb, "data_source_id", None) if kb else None,
+            "vector_bucket": None,
+            "index_name": None,
+            "embedding_model": getattr(self._clients.embeddings, "model_id", None),
+            "chunking": {
+                "strategy": self._config.knowledge_base.chunking_strategy,
+                "parent_tokens": 1500, "child_tokens": 300, "overlap_tokens": 60,
+            },
+            "routing": getattr(state, "_routing", []),
+            "ingestion": {
+                "scanned": ingestion.get("scanned"),
+                "indexed": ingestion.get("indexed"),
+                "modified": ingestion.get("modified"),
+                "failed": ingestion.get("failed"),
+                # chunks_written is NOT reliably available from the KB ingestion
+                # job (document-level stats only) -> null; the UI hides the chip.
+                "chunks_written": None,
+            },
+            "document_count": state.metrics.document_count,
+            "ticket_count": state.metrics.ticket_count,
+        }
+        self._rs.state(payload)
+
+    def _write_vectors_sample(self, ai: AgentInput, state: PipelineState) -> None:
+        """Precompute the run's chunk sample at the end of kb_ingest (spec v2 §5.6).
+
+        Best effort: any failure writes an empty sample and lets the run continue.
+        A missing sample must never fail a run. The actual index query is delegated
+        to the KB stage (which holds the data-source id and S3 Vectors access); if
+        that capability is absent, write an empty sample.
+        """
+        if not self._rs:
+            return
+        try:
+            sampler = getattr(state.kb_stage, "sample_chunks", None)
+            if callable(sampler):
+                sample = sampler(run_id=ai.run_id, max_chunks=5)
+            else:
+                sample = {"chunks": [], "error": "unavailable"}
+        except Exception as exc:  # noqa: BLE001 - never fail the run
+            logger.warning("vectors_sample_failed", error=str(exc))
+            sample = {"chunks": [], "error": "unavailable"}
+        self._rs.vectors_sample(sample)
 
 
 def _silhouette_excluding_noise(reduced: Any, labels: list[int]) -> float | None:

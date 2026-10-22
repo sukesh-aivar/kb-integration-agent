@@ -326,10 +326,21 @@ class BedrockKnowledgeBase:
                     },
                 },
                 vectorIngestionConfiguration={"chunkingConfiguration": chunking},
+                # Set the deletion policy EXPLICITLY (spec v2 §5.8): DELETE means
+                # removing the data source also removes its vectors from the index,
+                # which cleanup (scripts/cleanup_kbs.py) relies on. The previous
+                # default was left implicit. TODO(confirm) V4: exact param name /
+                # accepted values against current Bedrock docs.
+                dataDeletionPolicy="DELETE",
             )
         )
         self._data_source_id = ds["dataSource"]["dataSourceId"]
         return kb_id
+
+    @property
+    def data_source_id(self) -> str | None:
+        """The S3 data source id, needed by the chunk-sample filter (spec v2 §5.6)."""
+        return self._data_source_id
 
     def _wait_for_kb_active(  # pragma: no cover
         self, kb_id: str, timeout_s: float = 300.0
@@ -373,14 +384,47 @@ class BedrockKnowledgeBase:
                     knowledgeBaseId=kb_id, dataSourceId=self._data_source_id, ingestionJobId=job_id
                 )
             )
-            status = resp["ingestionJob"]["status"]
+            job = resp["ingestionJob"]
+            status = job["status"]
             if status in {"COMPLETE", "FAILED"}:
+                # Stash the job's document-level statistics for _state.json
+                # (spec v2 §5.5). Bedrock returns documents scanned/indexed/
+                # modified/failed — NOT a chunk count, so chunks_written stays null.
+                self._last_ingestion_stats = _map_ingestion_stats(job.get("statistics", {}))
                 if status == "FAILED":
                     raise IngestionError(f"Ingestion job {job_id} failed")
                 return status
             if time.monotonic() > deadline:
                 raise IngestionError(f"Ingestion job {job_id} timed out")
             time.sleep(self._poll_interval_s)
+
+    @property
+    def last_ingestion_stats(self) -> dict[str, Any] | None:
+        return getattr(self, "_last_ingestion_stats", None)
+
+    def sample_chunks(self, run_id: str, max_chunks: int = 5) -> dict[str, Any]:  # pragma: no cover
+        """Precompute a small chunk sample for this run (spec v2 §5.6).
+
+        Query the vector index filtered on the reserved data-source-id metadata
+        key (verify V3: it should be filterable; it is absent from the index's
+        nonFilterableMetadataKeys). Post-filter in code on this run's run_id so a
+        chunk from another run can never leak. On any failure return an empty
+        sample — a missing sample must never fail the run.
+        """
+        try:
+            return self._sample_chunks_impl(run_id, max_chunks)
+        except Exception as exc:  # noqa: BLE001 - never fail the run
+            logger.warning("sample_chunks_failed", run_id=run_id, error=str(exc))
+            return {"chunks": [], "error": "unavailable"}
+
+    def _sample_chunks_impl(  # pragma: no cover
+        self, run_id: str, max_chunks: int
+    ) -> dict[str, Any]:
+        # The actual S3 Vectors query/embedding is deferred to a hook the real
+        # client set injects; absent that, return an empty-but-valid sample. This
+        # keeps the method importable/testable offline and avoids coupling the KB
+        # stage to a specific S3 Vectors client surface we have not yet verified.
+        return {"chunks": [], "error": "unavailable", "method": "unimplemented"}
 
     def retrieve(  # pragma: no cover
         self, kb_id: str, query: str, top_k: int
@@ -406,6 +450,23 @@ class BedrockKnowledgeBase:
                 )
             )
         return passages
+
+
+def _map_ingestion_stats(statistics: dict[str, Any]) -> dict[str, Any]:
+    """Map a Bedrock ingestion job's ``statistics`` to our _state shape (spec v2 §5.5).
+
+    Bedrock's ``get_ingestion_job`` returns document-level counts only (no chunk
+    count), so the caller keeps ``chunks_written`` null. The exact statistics key
+    names are verified against the Bedrock agent API (TODO(confirm) V8). Missing
+    keys default to 0 so a partial statistics map never raises.
+    """
+    return {
+        "scanned": int(statistics.get("numberOfDocumentsScanned", 0) or 0),
+        "indexed": int(statistics.get("numberOfNewDocumentsIndexed", 0) or 0),
+        "modified": int(statistics.get("numberOfModifiedDocumentsIndexed", 0) or 0),
+        "deleted": int(statistics.get("numberOfDocumentsDeleted", 0) or 0),
+        "failed": int(statistics.get("numberOfDocumentsFailed", 0) or 0),
+    }
 
 
 def _chunking_config(strategy: str) -> dict[str, Any]:

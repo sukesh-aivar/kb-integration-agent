@@ -99,8 +99,12 @@ def test_kb_create_ingest_retrieve_roundtrip() -> None:
 
     stage = KnowledgeBaseStage(cs.knowledge_base, CONFIG)
     stage.create("test-kb", prefix)
-    status = stage.ingest()
-    assert status == "COMPLETE"
+    # ingest() now returns the document-level ingestion stats dict when the
+    # client exposes them (spec v2 §5.5); the fake indexes both docs.
+    stats = stage.ingest()
+    assert isinstance(stats, dict)
+    assert stats["indexed"] == 2
+    assert stats["failed"] == 0
 
     passages = stage.retrieve("how do I reset my password", top_k=5)
     assert passages
