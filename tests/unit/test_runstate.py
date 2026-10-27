@@ -23,13 +23,13 @@ from kb_agent.aws.clientset import build_fake_client_set
 from kb_agent.aws.interfaces import BdaResult
 from kb_agent.config import load_config
 from kb_agent.contract import AgentInput
-from kb_agent.exceptions import PageCapExceededError
 from kb_agent.obs.runstate import (
-    SKIP_NO_QUESTION_SET,
-    SKIP_NO_TICKETS,
+    SKIP_NOT_IN_WORKFLOW,
     compute_skip_set,
+    legacy_placeholder_skip_set,
 )
 from kb_agent.pipeline import Pipeline
+from tests.pdf_fixtures import make_empty_pdf
 
 CONFIG = load_config()
 
@@ -39,14 +39,7 @@ CONFIG = load_config()
 
 def _make_scanned_pdf(pages: int) -> bytes:
     """A text-free PDF of N pages: ~0 chars/page -> routes to BDA (rule 6)."""
-    import fitz
-
-    doc = fitz.open()
-    for _ in range(pages):
-        doc.new_page()
-    data = doc.tobytes()
-    doc.close()
-    return data
+    return make_empty_pdf(pages)
 
 
 class _BdaSpy:
@@ -66,15 +59,17 @@ def _events(store: object, run_id: str) -> list[dict]:
     return [json.loads(store.get_text(k)) for k in keys]
 
 
-# --- 1. page cap fails before BDA client call --------------------------------
+# --- 1. no page cap: max_pages is accepted and ignored (Part B decision 4) ---
 
 
-def test_page_cap_fails_before_any_bda_call() -> None:
+def test_max_pages_is_accepted_and_ignored_no_cap() -> None:
+    # Part B removes all agent-imposed page/cost caps. A legacy max_pages is still
+    # accepted on the payload (back-compat) but must NOT stop BDA from running.
     cs = build_fake_client_set()
     spy = _BdaSpy(cs.bda)
     cs.bda = spy  # type: ignore[assignment]
 
-    # One 5-page scanned PDF; cap is 3 -> must fail before BDA runs.
+    # One 5-page scanned PDF with a tiny legacy max_pages -> BDA still runs.
     cs.store.put_bytes("uploads/r/doc.pdf", _make_scanned_pdf(5))
     ai = AgentInput(
         run_id="r",
@@ -84,39 +79,11 @@ def test_page_cap_fails_before_any_bda_call() -> None:
 
     out = Pipeline(cs, CONFIG, force_bda=True).run(ai, emit_runstate=True)
 
-    assert out.status == "failed"
-    assert out.stage == "normalize_docs"
-    assert spy.calls == []  # BDA was never invoked
+    assert out.status != "failed"
+    assert spy.calls  # BDA WAS invoked despite the small max_pages
 
-    # _finished.json records the page_cap_exceeded kind (spec §5.3).
     fin = json.loads(cs.store.get_text("runs/r/_finished.json"))
-    assert fin["status"] == "failed"
-    assert fin["error"]["kind"] == "page_cap_exceeded"
-
-
-def test_page_cap_is_raised_as_page_cap_error() -> None:
-    # The two-pass normalize must raise PageCapExceededError (not a BDA error),
-    # so the mapping to kind=page_cap_exceeded is exercised directly.
-    cs = build_fake_client_set()
-    spy = _BdaSpy(cs.bda)
-    cs.bda = spy  # type: ignore[assignment]
-    cs.store.put_bytes("uploads/r2/doc.pdf", _make_scanned_pdf(4))
-    pipe = Pipeline(cs, CONFIG, force_bda=True)
-    state = type("S", (), {})()
-    state._max_pages = 2  # type: ignore[attr-defined]
-    # Drive the stage directly to assert the exception type precisely.
-    ai = AgentInput(run_id="r2", document_uris=["s3://b/uploads/r2/doc.pdf"], max_pages=2)
-    from kb_agent.pipeline import PipelineState
-
-    st = PipelineState()
-    st._max_pages = 2  # type: ignore[attr-defined]
-    st._owner_id = None  # type: ignore[attr-defined]
-    from kb_agent.obs.audit import RunManifest
-
-    manifest = RunManifest(run_id="r2", config_snapshot={}, library_versions={})
-    with pytest.raises(PageCapExceededError):
-        pipe._stage_normalize_docs(ai, st, manifest, None)
-    assert spy.calls == []
+    assert fin["status"] != "failed"
 
 
 # --- 2. vectors_sample never cross-run ---------------------------------------
@@ -152,29 +119,28 @@ def test_vectors_sample_is_scoped_to_its_own_run() -> None:
 # --- 3. _started skip set correct --------------------------------------------
 
 
-def test_skip_set_docs_only_skips_ticket_and_join_stages() -> None:
-    skipped = compute_skip_set(has_tickets=False, has_golden=False)
+def test_skip_set_is_empty_in_kb_only_workflow() -> None:
+    # v3: the active KB-only workflow has only the four KB stages, none skipped.
+    assert compute_skip_set(has_tickets=False, has_golden=False) == {}
+    assert compute_skip_set(has_tickets=True, has_golden=True) == {}
+
+
+def test_legacy_placeholder_skip_set_marks_the_nine_dormant_stages() -> None:
+    # A4.2: with the legacy flag on, an unchanged 13-step consumer sees the nine
+    # dormant stages marked skipped with the exact reason string.
+    skipped = legacy_placeholder_skip_set()
     for stage in (
-        "load_tickets", "adapt_tickets", "clean_tickets",
-        "embed_texts", "intent_cluster", "name_clusters",
-        "coverage_check", "draft_article",
+        "load_tickets", "adapt_tickets", "clean_tickets", "embed_texts",
+        "intent_cluster", "name_clusters", "kb_retrieve", "coverage_check",
+        "draft_article",
     ):
-        assert skipped[stage] == SKIP_NO_TICKETS
-    assert skipped["kb_retrieve"] == SKIP_NO_QUESTION_SET
-    # The red-pill + KB stages are NOT skipped when only docs are supplied.
+        assert skipped[stage] == SKIP_NOT_IN_WORKFLOW
+    # The four active stages are never in the skip set.
     for stage in ("normalize_docs", "kb_create", "kb_ingest", "write_report"):
         assert stage not in skipped
 
 
-def test_skip_set_with_tickets_keeps_ticket_stages() -> None:
-    skipped = compute_skip_set(has_tickets=True, has_golden=False)
-    for stage in ("load_tickets", "adapt_tickets", "coverage_check", "draft_article"):
-        assert stage not in skipped
-    # Without a question set, retrieval is still skipped.
-    assert skipped["kb_retrieve"] == SKIP_NO_QUESTION_SET
-
-
-def test_started_file_records_computed_skip_set() -> None:
+def test_started_file_records_empty_skip_set_in_kb_only() -> None:
     cs = build_fake_client_set()
     cs.store.put_text("uploads/s/docs/a.md", "hello world content")
     Pipeline(cs, CONFIG).run(
@@ -183,8 +149,8 @@ def test_started_file_records_computed_skip_set() -> None:
     )
     started = json.loads(cs.store.get_text("runs/s/_started.json"))
     assert started["agent_version"] == "v3"
-    assert started["skipped"]["load_tickets"] == SKIP_NO_TICKETS
-    assert "normalize_docs" not in started["skipped"]
+    assert started["skipped"] == {}
+    assert started["stage_order"] == ["normalize_docs", "kb_create", "kb_ingest", "write_report"]
 
 
 # --- 4. event keys sort chronologically --------------------------------------
@@ -294,3 +260,34 @@ def test_bda_input_uri_keeps_the_bucket_name() -> None:
     assert got == uri
     assert got.startswith("s3://kb-integration-agent-test/")
     assert not got.startswith("s3://uploads/")
+
+
+# --- 9. legacy stage placeholders (A4.2) -------------------------------------
+
+
+def test_legacy_placeholders_report_thirteen_with_nine_skipped() -> None:
+    """With legacy_stage_placeholders on, _started reports the original 13 stages
+    (nine dormant ones skipped), while execution still runs only the four."""
+    cfg = load_config().model_copy(deep=True)
+    cfg.workflow.legacy_stage_placeholders = True
+
+    cs = build_fake_client_set()
+    cs.store.put_text("uploads/leg/docs/a.md", "hello world content")
+    Pipeline(cs, cfg).run(
+        AgentInput(run_id="leg", document_uris=["s3://b/uploads/leg/docs/a.md"]),
+        emit_runstate=True,
+    )
+
+    started = json.loads(cs.store.get_text("runs/leg/_started.json"))
+    assert len(started["stage_order"]) == 13
+    assert len(started["skipped"]) == 9
+    for stage in (
+        "load_tickets", "adapt_tickets", "clean_tickets", "embed_texts",
+        "intent_cluster", "name_clusters", "kb_retrieve", "coverage_check",
+        "draft_article",
+    ):
+        assert started["skipped"][stage] == SKIP_NOT_IN_WORKFLOW
+
+    # Manifest records the 9 skipped placeholders + the 4 executed stages = 13.
+    manifest = json.loads(cs.store.get_text("runs/leg/manifest.json"))
+    assert len(manifest["stages"]) == 13

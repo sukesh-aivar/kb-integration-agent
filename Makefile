@@ -5,7 +5,7 @@ PYTHON ?= python3.11
 VENV   ?= .venv
 BIN    := $(VENV)/bin
 
-.PHONY: help setup test test-all eval run lint format typecheck docker-build clean
+.PHONY: help setup test test-dormant test-all eval run lint format typecheck docker-build clean
 
 help:
 	@echo "Targets:"
@@ -34,8 +34,13 @@ setup:
 test:
 	$(BIN)/pytest
 
+# Dormant (not-wired) code tests, run on demand (v3 KB-only reorg).
+test-dormant:
+	$(BIN)/pytest -m "dormant"
+
+# Everything: active + dormant + aws-marked.
 test-all:
-	$(BIN)/pytest -m "aws or not aws"
+	$(BIN)/pytest -m "aws or dormant or (not aws and not dormant)"
 
 eval:
 	$(BIN)/python evals/run_evals.py --mode fake

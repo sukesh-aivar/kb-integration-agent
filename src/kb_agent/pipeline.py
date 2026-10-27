@@ -22,38 +22,53 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from kb_agent.aws.clientset import ClientSet
-from kb_agent.config import AppConfig
-from kb_agent.contract import AgentInput, AgentOutput, ArtifactRef, RunMetrics
+from kb_agent.config import AppConfig, get_settings
+from kb_agent.contract import AgentInput, AgentOutput, RunMetrics
 from kb_agent.documents.bda import BdaProcessor
-from kb_agent.documents.features import extract_features
-from kb_agent.documents.knowledge_base import KnowledgeBaseStage, recall_at_5_from_golden
-from kb_agent.documents.normalize import normalize_documents, normalize_raw_documents
-from kb_agent.documents.router import route_document
-from kb_agent.documents.staging import is_stageable_document
-from kb_agent.join.coverage import coverage_check
-from kb_agent.join.drafting import draft_articles
+from kb_agent.documents.knowledge_base import KnowledgeBaseStage
+from kb_agent.documents.multifile import MultiFileNormalizer, discover
+from kb_agent.documents.normalize import NormalizedDocument
+from kb_agent.documents.outcomes import NormalizationResult
 from kb_agent.join.report import build_report, render_markdown
 from kb_agent.logging_setup import bind_run_id, get_logger
-from kb_agent.models import Route, SourceType
 from kb_agent.obs.audit import RunManifest, library_versions
 from kb_agent.obs.runstate import RunStateWriter, compute_skip_set
 from kb_agent.obs.timing import StageTimer
 from kb_agent.obs.tracing import stage_span
-from kb_agent.review.state import ReviewRegistry
-from kb_agent.tickets.adapters.sample import SampleAdapter
-from kb_agent.tickets.clean import clean_tickets, embedding_texts
-from kb_agent.tickets.cluster import cluster_embeddings, should_use_density_clustering
-from kb_agent.tickets.embed import EmbeddingCache
-from kb_agent.tickets.loaders import load_tickets_uri
-from kb_agent.tickets.naming import name_clusters
+
+# --- DORMANT (v3 KB-only reorg): the ticket/join/review stages and their helpers
+# moved to kb_agent.dormant.*; they are NOT wired into the active workflow. The
+# nine dormant _stage_* methods live on DormantStagesMixin (dormant/pipeline_stages.py),
+# which the active Pipeline does NOT inherit. To re-enable them: inherit the mixin
+# and restore LEGACY_STAGE_ORDER_13 as the active order.
+# DORMANT: from kb_agent.dormant.join.coverage import coverage_check
+# DORMANT: from kb_agent.dormant.join.drafting import draft_articles
+# DORMANT: from kb_agent.dormant.review.state import ReviewRegistry
+# DORMANT: from kb_agent.dormant.tickets.adapters.sample import SampleAdapter
+# DORMANT: from kb_agent.dormant.tickets.clean import clean_tickets, embedding_texts
+# DORMANT: from kb_agent.dormant.tickets.cluster import (
+# DORMANT:     cluster_embeddings, should_use_density_clustering)
+# DORMANT: from kb_agent.dormant.tickets.embed import EmbeddingCache
+# DORMANT: from kb_agent.dormant.tickets.loaders import load_tickets_uri
+# DORMANT: from kb_agent.dormant.tickets.naming import name_clusters
+# DORMANT: from kb_agent.dormant.documents_extras import recall_at_5_from_golden
 
 logger = get_logger(__name__)
 
-# The fixed happy-path stage order (spec 6: order of the happy path is CODE).
-STAGE_ORDER = [
+# The active KB-only happy-path stage order (v3). Order is CODE (spec 6).
+KB_ONLY_STAGE_ORDER = [
+    "normalize_docs",
+    "kb_create",
+    "kb_ingest",
+    "write_report",
+]
+
+# The original 13-stage order, kept for the legacy_stage_placeholders flag (A4.2)
+# so an unchanged consumer with a fixed 13-step list still sees them (as skipped).
+LEGACY_STAGE_ORDER_13 = [
     "load_tickets",
     "adapt_tickets",
     "clean_tickets",
@@ -68,6 +83,10 @@ STAGE_ORDER = [
     "draft_article",
     "write_report",
 ]
+
+# Back-compat alias: existing code/tests reference STAGE_ORDER. In the KB-only
+# workflow it IS the four-stage order.
+STAGE_ORDER = KB_ONLY_STAGE_ORDER
 
 
 # Reader-facing stage labels (match the frontend STEP labels). Used only for the
@@ -116,12 +135,9 @@ def _error_kind(exc: Exception) -> str:
     """Map an exception to a stable error kind for _finished.json (spec v2 §5.3)."""
     from kb_agent.exceptions import (
         IngestionError,
-        PageCapExceededError,
         ParsingError,
         ValidationError,
     )
-    if isinstance(exc, PageCapExceededError):
-        return "page_cap_exceeded"
     if isinstance(exc, ValidationError):
         return "validation_error"
     if isinstance(exc, ParsingError):
@@ -198,32 +214,83 @@ class Pipeline:
         state._owner_id = agent_input.owner_id  # type: ignore[attr-defined]
         state._max_pages = agent_input.max_pages  # type: ignore[attr-defined]
 
-        # run-state writer (opt-in). Compute the skip set up front from inputs.
-        rs: RunStateWriter | None = None
-        skipped = compute_skip_set(
-            has_tickets=bool(agent_input.ticket_uri),
-            has_golden=bool(golden),
+        # Resolve the project identity (Part B). project_id is the stable key the
+        # vector index / KB / data source / source prefix / lock all hang off. When
+        # provisioning is enabled, documents are staged under the PROJECT prefix
+        # (accumulates across runs); otherwise they stay under the per-run prefix
+        # so the Part A behaviour is unchanged.
+        from kb_agent import project as _project
+        pid = agent_input.project_id
+        project_id = _project.validate_project_id(pid) if pid else _project.derive_project_id(
+            agent_input.run_id
         )
+        state._project_id = project_id  # type: ignore[attr-defined]
+        if self._config.provisioning.enabled:
+            state._kb_prefix = _project.source_prefix(  # type: ignore[attr-defined]
+                project_id, root=self._config.provisioning.kb_source_root
+            ).rstrip("/")
+        else:
+            state._kb_prefix = f"runs/{agent_input.run_id}/kb-docs"  # type: ignore[attr-defined]
+        state._lock = None  # type: ignore[attr-defined]
+
+        # run-state writer (opt-in). KB-only: the active skip set is empty. When
+        # the legacy placeholder flag is on (A4.2), REPORT the original 13-stage
+        # order with the nine dormant stages marked skipped — this only affects
+        # what is reported in _started.json / manifest, never execution (the loop
+        # below always iterates the four active stages).
+        rs: RunStateWriter | None = None
+        legacy = self._config.workflow.legacy_stage_placeholders
+        if legacy:
+            from kb_agent.obs.runstate import legacy_placeholder_skip_set
+            reported_stage_order = list(LEGACY_STAGE_ORDER_13)
+            skipped = legacy_placeholder_skip_set()
+        else:
+            reported_stage_order = list(STAGE_ORDER)
+            skipped = compute_skip_set(
+                has_tickets=bool(agent_input.ticket_uri),
+                has_golden=bool(golden),
+            )
         if emit_runstate:
             rs = RunStateWriter(self._clients.store, agent_input.run_id)
             rs.started(
-                stage_order=list(STAGE_ORDER),
+                stage_order=reported_stage_order,
                 skipped=skipped,
                 inputs={
                     "documents": [{"uri": u} for u in agent_input.document_uris],
+                    "source_uri": agent_input.source_uri,
                     "ticket": agent_input.ticket_uri,
                 },
                 owner_id=agent_input.owner_id,
+                project_id=getattr(state, "_project_id", None),
+                source_uri=agent_input.source_uri,
+                vector_store=agent_input.vector_store or self._config.vector_store.type,
             )
             for stg, reason in skipped.items():
                 rs.stage_skipped(stg, reason)
+            # Deprecated input: a ticket export is accepted and ignored in the
+            # KB-only workflow (A4.5). Emit exactly one info event when present.
+            if agent_input.ticket_uri:
+                rs.info(
+                    "A ticket export was supplied and ignored: ticket analysis "
+                    "is not part of this workflow."
+                )
             rs.start_heartbeat()
+        # Record the dormant placeholders in the manifest too when legacy is on.
+        if legacy:
+            for stg, reason in skipped.items():
+                manifest.record_stage(stg, "skipped", output=reason)
         self._rs = rs
 
         start_index = 0
         if agent_input.resume_from:
             if agent_input.resume_from not in STAGE_ORDER:
-                raise ValueError(f"unknown resume_from stage: {agent_input.resume_from}")
+                # A resume_from naming a dormant/unknown stage is invalid input
+                # (A4.1). The HTTP layer maps ValueError -> 400 invalid_input; we
+                # list the valid KB-only stages so the caller can correct it.
+                raise ValueError(
+                    f"invalid resume_from {agent_input.resume_from!r}; "
+                    f"valid stages are {STAGE_ORDER}"
+                )
             start_index = STAGE_ORDER.index(agent_input.resume_from)
 
         stage = STAGE_ORDER[start_index]  # default so the except clause has a value
@@ -288,16 +355,63 @@ class Pipeline:
             raise
         finally:
             self._rs = None
+            # Release the per-project lock if one was acquired (B4.4), no matter
+            # how the run ended.
+            lock = getattr(state, "_lock", None)
+            if lock is not None:
+                try:
+                    lock.release()
+                except Exception:  # noqa: BLE001 - release must never mask a result
+                    logger.warning("project_lock_release_failed")
 
         state.metrics.stage_durations_sec = timer.durations
         artifacts = self._finalise(agent_input.run_id, state, manifest)
         manifest.metrics = state.metrics.model_dump(mode="json")
         manifest.finish()
         self._write_manifest(agent_input.run_id, manifest)
+
+        # Run disposition from the per-file outcomes (B3.5): if EVERY file ended
+        # rejected/failed/ignored the run FAILS with no_documents_ingested; a
+        # partial failure is still completed, with warnings.
+        from kb_agent.documents.outcomes import aggregate_run_status
+        outcomes = getattr(state, "_file_outcomes", []) or []
+        disposition, file_warnings = aggregate_run_status(outcomes)
+        warnings = list(getattr(state, "_warnings", [])) + file_warnings
+        binding_uri = getattr(state, "_binding_uri", None)
+        out_project_id = getattr(state, "_project_id", None)
+        kb_id = state.kb_stage.kb_id if state.kb_stage else None
+
+        if outcomes and disposition == "no_documents_ingested":
+            # Nothing usable was produced; surface a clear terminal failure.
+            if rs:
+                rs.stop_heartbeat()
+                rs.finished({
+                    "status": "failed", "ended_at": _utcnow_iso(),
+                    "elapsed_seconds": round(sum(timer.durations.values()), 2),
+                    "failing_stage": "normalize_docs",
+                    "error": {"kind": "no_documents_ingested",
+                              "message": "No supported documents could be ingested."},
+                })
+            return AgentOutput(
+                run_id=agent_input.run_id, status="failed", stage="normalize_docs",
+                artifacts=artifacts, metrics=state.metrics,
+                project_id=out_project_id, knowledge_base_id=kb_id,
+                knowledge_binding_uri=binding_uri, warnings=warnings,
+                errors=[{"stage": "normalize_docs", "kind": "no_documents_ingested",
+                         "message": "No supported documents could be ingested."}],  # type: ignore[list-item]
+            )
+
+        # Terminal status: completed (no human-review gate). The legacy flag
+        # re-emits it as needs_review for an unchanged 13-step consumer (B1.3).
+        final_status: Literal["completed", "needs_review"] = (
+            "needs_review"
+            if self._config.workflow.legacy_status_needs_review
+            else "completed"
+        )
         if rs:
             rs.stop_heartbeat()
             rs.finished({
-                "status": "needs_review",
+                "status": final_status,
                 "ended_at": _utcnow_iso(),
                 "elapsed_seconds": round(sum(timer.durations.values()), 2),
                 "failing_stage": None,
@@ -306,13 +420,16 @@ class Pipeline:
 
         return AgentOutput(
             run_id=agent_input.run_id,
-            status="needs_review",  # everything is pending_review (spec 2.2)
+            status=final_status,
             stage="write_report",
             artifacts=artifacts,
             metrics=state.metrics,
-            pending_review=[
-                ArtifactRef(name="report", uri=artifacts.get("report", ""), status="pending_review")
-            ],
+            project_id=out_project_id,
+            knowledge_base_id=kb_id,
+            knowledge_binding_uri=binding_uri,
+            warnings=warnings,
+            # DORMANT: review registry is unwired in the KB-only workflow (A4).
+            pending_review=[],
         )
 
     # --- stage dispatch ------------------------------------------------------
@@ -328,95 +445,11 @@ class Pipeline:
         handler = getattr(self, f"_stage_{stage}")
         handler(agent_input, state, manifest, golden)
 
-    # --- blue pill stages ----------------------------------------------------
-
-    def _stage_load_tickets(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        if not ai.ticket_uri:
-            logger.info("no_tickets_supplied")
-            state._raw_rows = []  # type: ignore[attr-defined]
-            return
-        rows = load_tickets_uri(ai.ticket_uri, self._clients.store)
-        state._raw_rows = rows  # type: ignore[attr-defined]
-
-    def _stage_adapt_tickets(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        rows = getattr(state, "_raw_rows", [])
-        tickets, report = SampleAdapter().adapt(rows)
-        state.tickets = tickets
-        state.metrics.ticket_count = len(tickets)
-
-    def _stage_clean_tickets(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        state.tickets, _ = clean_tickets(state.tickets)
-
-    def _stage_embed_texts(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        cache = EmbeddingCache()
-        state._vectors = cache.get_or_compute(  # type: ignore[attr-defined]
-            embedding_texts(state.tickets), self._clients.embeddings
-        )
-
-    def _stage_intent_cluster(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        vectors = getattr(state, "_vectors", [])
-        if not vectors:
-            return
-        if should_use_density_clustering(len(state.tickets), self._config):
-            result = cluster_embeddings(vectors, self._config)
-            state.labels = result.labels
-            state.reduced = result.reduced
-            state.metrics.cluster_count = result.n_clusters
-            state.metrics.noise_share = round(result.noise_share, 4)
-            # Silhouette on the reduced coordinates, excluding noise (spec 1.5).
-            state.metrics.silhouette = _silhouette_excluding_noise(result.reduced, result.labels)
-        else:
-            # <500 path handled in name step via LLM categorisation fallback.
-            state.labels = [0] * len(state.tickets)
-            import numpy as np
-
-            state.reduced = np.zeros((len(state.tickets), 2))
-
-    def _stage_name_clusters(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        if not state.labels:
-            return
-        clusters, pv = name_clusters(
-            state.tickets, state.labels, state.reduced, self._clients.llm,
-            seed=self._config.seed,
-        )
-        state.clusters = clusters
-        manifest.record_model_call(self._clients.llm.model_id, "naming", pv)
+    # --- DORMANT stages (moved to kb_agent.dormant.pipeline_stages.DormantStagesMixin):
+    # _stage_load_tickets, _stage_adapt_tickets, _stage_clean_tickets,
+    # _stage_embed_texts, _stage_intent_cluster, _stage_name_clusters (blue pill);
+    # _stage_kb_retrieve; _stage_coverage_check, _stage_draft_article (join).
+    # They are not in KB_ONLY_STAGE_ORDER, so they are never dispatched here.
 
     # --- red pill stages -----------------------------------------------------
 
@@ -427,125 +460,84 @@ class Pipeline:
         manifest: RunManifest,
         golden: list[dict] | None,
     ) -> None:
-        # Red pill: for each document, extract features, route it, then:
-        #   * BDA    -> call Bedrock Data Automation, write the returned MARKDOWN
-        #              to the KB prefix (KB ingests clean text);
-        #   * DEFAULT -> write the RAW bytes (Bedrock's own parser ingests it);
-        #   * REJECT  -> skip and log.
-        # ``force_bda`` (from the CLI) forces the BDA route on every document for
-        # testing, regardless of what the router decides.
-        prefix = f"runs/{ai.run_id}/kb-docs"
+        # Multi-file normalisation (Part B B3): discover every source object,
+        # route each on cheap signals, dedupe by content hash, then process in a
+        # bounded pool - BDA (markdown), CONVERT (structured -> markdown) or
+        # DEFAULT (raw bytes). One failed file never fails the run; each file gets
+        # a FileOutcome. Markdown/converted extractions also get a per-run copy
+        # under runs/{run_id}/extractions/ for review (B4.3). The destination
+        # prefix is the project prefix when provisioning is enabled (accumulates
+        # across runs), else the per-run prefix (Part A behaviour).
+        prefix = getattr(state, "_kb_prefix", f"runs/{ai.run_id}/kb-docs")
 
-        # --- Pass 1: route every document (NO paid BDA call yet) so the page cap
-        # can be enforced before the first Data Automation invocation (spec v2 §5.8).
-        # Each entry: (name, key, src_uri, data, route, decision, page_count)
-        # src_uri is the ORIGINAL full s3://bucket/key the caller supplied (when it
-        # was one), used verbatim for the BDA call — reconstructing it from the
-        # bare key dropped the bucket name and made BDA read s3://uploads/... .
-        routed: list[tuple[str, str, str, bytes, Route, Any, int]] = []
-        for uri in ai.document_uris:
-            key = uri.split("/", 3)[-1] if uri.startswith("s3://") else uri
-            # Full s3 uri for BDA: keep the caller's uri if it was already one;
-            # otherwise build it from the store's bucket (never f"s3://{key}",
-            # which drops the bucket). _store_uri falls back to the bare key if the
-            # store exposes no bucket (keeps fakes/tests working).
-            src_uri = uri if uri.startswith("s3://") else _store_uri(self._clients.store, key)
-            name = key.rsplit("/", 1)[-1]
-            if not is_stageable_document(name):
-                logger.info("skip_non_content_document", name=name)
-                continue
-            try:
-                data = self._clients.store.get_bytes(key)
-            except KeyError:
-                logger.info("document_not_found", key=key)
-                continue
-            features = extract_features(name, data)
-            decision = route_document(features, self._config)
-            route = Route.BDA if self._force_bda else decision.route
+        def _emit(msg: str) -> None:
+            if self._rs:
+                self._rs.info(msg, stage="normalize_docs")
+
+        discovered, ignored = discover(
+            self._clients.store, ai, max_files=int(self._config.source.max_files)
+        )
+        bda_proc = BdaProcessor(self._clients.bda, self._clients.store)
+        normalizer = MultiFileNormalizer(
+            self._clients.store, bda_proc, self._config,
+            run_id=ai.run_id, kb_prefix=prefix,
+            owner_id=getattr(state, "_owner_id", None),
+            force_bda=self._force_bda, emit=_emit,
+        )
+        result = normalizer.run(discovered)
+        all_outcomes = ignored + result.outcomes
+        all_outcomes.sort(key=lambda o: o.name)
+
+        # Record routing decisions in the manifest (names + routes only).
+        for o in all_outcomes:
             manifest.routing_decisions.append(
-                {"file": name, "route": route.value, "rule_id": decision.rule_id,
-                 "reason": decision.reason, "forced": self._force_bda}
+                {"file": o.name, "route": o.route or "ignored", "rule_id": o.rule_id,
+                 "reason": o.status_reason or o.reason, "forced": self._force_bda}
             )
-            logger.info("route_document", file=name, route=route.value, rule_id=decision.rule_id)
-            if self._rs and route is not Route.REJECT:
-                dest = "Bedrock Data Automation" if route is Route.BDA else "the default parser"
-                self._rs.info(
-                    f"Routing {name} to {dest} (rule {decision.rule_id}: {decision.reason})",
-                    stage="normalize_docs",
-                )
-            routed.append(
-                (name, key, src_uri, data, route, decision, int(features.page_count or 0))
-            )
+            logger.info("file_outcome", file=o.name, status=o.status, route=o.route)
 
-        # Page cap: sum pages of BDA-routed files; fail BEFORE any paid call.
-        max_pages = getattr(state, "_max_pages", None)
-        if max_pages is not None:
-            bda_pages = sum(
-                pc for (_n, _k, _u, _d, route, _dec, pc) in routed if route is Route.BDA
-            )
-            if bda_pages > max_pages:
-                if self._rs:
-                    self._rs.stage_failed(
-                        "normalize_docs",
-                        f"Needs ~{bda_pages} scanned pages; limit is {max_pages}.",
-                    )
-                from kb_agent.exceptions import PageCapExceededError
-                raise PageCapExceededError(bda_pages, max_pages)
+        # Staged files become the KB documents; expose for kb_create/ingest.
+        staged = [o for o in all_outcomes if o.status == "staged"]
+        state.normalized_docs = [
+            NormalizedDocument(o.kb_key or "", f"{o.kb_key}.metadata.json", (o.content_hash or ""))
+            for o in staged
+        ]
+        state.metrics.document_count = len(staged)
+        state._file_outcomes = all_outcomes  # type: ignore[attr-defined]
+        state._pages_processed = bda_proc.pages_processed  # type: ignore[attr-defined]
+        state._chunking_strategy = ai.chunking_strategy or (  # type: ignore[attr-defined]
+            self._config.knowledge_base.chunking_strategy
+        )
+        # Multi-file metrics (B5.3). files_total excludes ignored noise.
+        counts = NormalizationResult(outcomes=all_outcomes).counts()
+        state.metrics.files_total = sum(
+            counts.get(s, 0) for s in
+            ("staged", "ingested", "rejected", "failed", "skipped_duplicate", "unchanged")
+        )
+        state.metrics.files_ingested = len(staged) + counts.get("unchanged", 0)
+        state.metrics.files_rejected = counts.get("rejected", 0)
+        state.metrics.files_failed = counts.get("failed", 0)
+        state.metrics.pages_processed = bda_proc.pages_processed
+        state.metrics.bda_cache_hits = sum(1 for o in all_outcomes if o.bda_cached)
+        # Back-compat routing view for _state.json (names/routes/sizes only).
+        state._routing = [  # type: ignore[attr-defined]
+            {"file": o.name, "size": o.size, "pages": o.pages,
+             "route": o.route or "ignored", "rule_id": o.rule_id, "reason": o.reason}
+            for o in all_outcomes
+        ]
 
-        # --- Pass 2: now run BDA / default parsing.
-        raw_docs: list[tuple[str, bytes, Route]] = []
-        md_docs: list[tuple[str, str, Route]] = []
-        bda_proc = None
-        routing_state: list[dict[str, Any]] = []
-        for name, _key, src_uri, data, route, decision, pages in routed:
-            routing_state.append({"file": name, "size": len(data), "pages": pages,
-                                  "route": "bda" if route is Route.BDA else "default",
-                                  "rule_id": decision.rule_id, "reason": decision.reason})
-            if route is Route.REJECT:
-                logger.info("document_rejected", file=name, reason=decision.reason)
-                continue
-            if route is Route.BDA:
-                if bda_proc is None:
-                    bda_proc = BdaProcessor(
-                        self._clients.bda, self._clients.store,
-                        page_cap=self._config.cost.bda_page_cap_per_run,
-                    )
-                result = bda_proc.process(name, data, src_uri)
-                logger.info("bda_processed", file=name, pages=result.pages_processed,
-                            cached=result.cached)
-                if self._rs:
-                    if result.cached:
-                        self._rs.info(f"{name} was parsed before, so the cached result was reused",
-                                      stage="normalize_docs")
-                    else:
-                        self._rs.info(f"Parsed {result.pages_processed} pages from {name}",
-                                      stage="normalize_docs")
-                md_docs.append((name, result.markdown, route))
-            else:  # DEFAULT
-                raw_docs.append((name, data, route))
-
-        normalized = []
-        if raw_docs:
-            normalized += normalize_raw_documents(
-                raw_docs, run_id=ai.run_id, store=self._clients.store,
-                data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
-                owner_id=getattr(state, "_owner_id", None),
-            )
-        if md_docs:
-            normalized += normalize_documents(
-                md_docs, run_id=ai.run_id, store=self._clients.store,
-                data_source_prefix=prefix, source_type=SourceType.UPLOADED_DOC,
-                owner_id=getattr(state, "_owner_id", None),
-            )
-        state.normalized_docs = normalized
-        state.metrics.document_count = len(state.normalized_docs)
-        state._routing = routing_state  # type: ignore[attr-defined]
         if self._rs:
-            n_bda = sum(1 for r in routing_state if r["route"] == "bda")
-            n_def = len(routing_state) - n_bda
+            for o in all_outcomes:
+                self._rs.file_outcome(o.name, o.status, o.route)
+            counts = NormalizationResult(outcomes=all_outcomes).counts()
+            n_bda = sum(1 for o in all_outcomes if o.route == "bda")
+            n_conv = sum(1 for o in all_outcomes if o.route == "convert")
+            n_def = sum(1 for o in all_outcomes if o.route == "default")
             self._rs.info(
-                f"Parsed {len(routing_state)} file{'s' if len(routing_state) != 1 else ''}: "
-                f"{n_bda} with Bedrock Data Automation, {n_def} with the default parser",
+                f"Processed {len(all_outcomes)} file{'s' if len(all_outcomes) != 1 else ''}: "
+                f"{n_def} default parser, {n_bda} Bedrock Data Automation, "
+                f"{n_conv} converted; {counts.get('rejected', 0)} rejected, "
+                f"{counts.get('ignored', 0)} ignored.",
                 stage="normalize_docs",
             )
 
@@ -556,9 +548,54 @@ class Pipeline:
         manifest: RunManifest,
         golden: list[dict] | None,
     ) -> None:
-        stage = KnowledgeBaseStage(self._clients.knowledge_base, self._config)
-        stage.create(f"kb-{ai.run_id}", f"runs/{ai.run_id}/kb-docs")
-        state.kb_stage = stage
+        project_id = getattr(state, "_project_id", None) or ai.run_id
+        chunking = ai.chunking_strategy or self._config.knowledge_base.chunking_strategy
+
+        if self._config.provisioning.enabled:
+            # Acquire the per-project lock FIRST (held through kb_ingest; released
+            # in run()'s finally). Two runs on one project must not provision or
+            # ingest at once (B4.4).
+            rs = self._rs
+            emit = (lambda m: rs.info(m, stage="kb_create")) if rs else None
+
+            def _emit_event(type_: str, data: dict) -> None:
+                if rs:
+                    rs.event(
+                        type_, stage="kb_create",
+                        text=f"{data.get('resource_type')} {data.get('name')}", data=data,
+                    )
+
+            from kb_agent.lock import ProjectLock
+            from kb_agent.project import lock_key
+            lock = ProjectLock(
+                self._clients.store,
+                lock_key(project_id, root=self._config.provisioning.kb_source_root),
+                ai.run_id,
+                ttl_seconds=self._config.provisioning.lock_ttl_seconds,
+                wait_seconds=self._config.provisioning.lock_wait_seconds,
+            )
+            lock.acquire(emit=emit)
+            state._lock = lock  # type: ignore[attr-defined]
+
+            from kb_agent.provisioning import Provisioner
+            provisioner = Provisioner(
+                self._clients.store, self._clients.vector_admin,
+                self._clients.knowledge_base, self._config, get_settings(),
+                emit=emit, emit_event=_emit_event,
+            )
+            result = provisioner.provision(project_id, ai.run_id, chunking_strategy=chunking)
+            # Bind a KB stage to the provisioned ids (no second create).
+            stage = KnowledgeBaseStage(self._clients.knowledge_base, self._config)
+            stage._kb_id = result.knowledge_base_id  # type: ignore[attr-defined]
+            state.kb_stage = stage
+            state._provisioning = result  # type: ignore[attr-defined]
+        else:
+            # Fallback (Part A behaviour): per-run KB, no provisioning/lock.
+            kb_prefix = getattr(state, "_kb_prefix", f"runs/{ai.run_id}/kb-docs")
+            stage = KnowledgeBaseStage(self._clients.knowledge_base, self._config)
+            stage.create(f"kb-{ai.run_id}", kb_prefix)
+            state.kb_stage = stage
+
         # Write kb_id / data_source_id into _state.json as soon as kb_create ends
         # (spec v2 §5.5) — the outputs screen needs them early.
         if self._rs:
@@ -577,69 +614,36 @@ class Pipeline:
         if self._rs:
             self._rs.info("Ingestion started", stage="kb_ingest")
         stats = state.kb_stage.ingest()  # may return a dict of stats or a status str
+        ingestion = stats if isinstance(stats, dict) else {}
+        state._ingestion = ingestion  # type: ignore[attr-defined]
+
+        # Upgrade each staged file to ingested. The ingestion API reports
+        # aggregate counts + a failureReasons LIST (no per-document-key map; see
+        # docs/phase2-design.md §0.3), so we mark staged files ingested and raise
+        # a run-level warning when the job reports failures, rather than guessing
+        # which file failed.
+        for o in getattr(state, "_file_outcomes", []) or []:
+            if o.status == "staged":
+                o.status = "ingested"
+        n_failed = int(ingestion.get("failed") or 0)
+        if n_failed:
+            warns = getattr(state, "_warnings", [])  # type: ignore[attr-defined]
+            warns.append(f"ingestion reported {n_failed} document(s) failed to index")
+            state._warnings = warns  # type: ignore[attr-defined]
+
+        # Write the handover binding now that ids + ingestion stats exist (B5.3).
+        self._write_binding(ai, state, ingestion)
+
         if self._rs:
-            indexed = None
-            if isinstance(stats, dict):
-                indexed = stats.get("indexed")
-            state._ingestion = stats if isinstance(stats, dict) else {}  # type: ignore[attr-defined]
+            indexed = ingestion.get("indexed")
             n = indexed if indexed is not None else state.metrics.document_count
             self._rs.info(f"Ingestion complete: {n} document{'s' if n != 1 else ''} indexed",
                           stage="kb_ingest")
             self._write_state(state)
             self._write_vectors_sample(ai, state)
 
-    def _stage_kb_retrieve(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        if state.kb_stage and golden:
-            recall, _ = recall_at_5_from_golden(state.kb_stage, golden)
-            state.metrics.recall_at_5 = round(recall, 4)
-
-    # --- join stages ---------------------------------------------------------
-
-    def _stage_coverage_check(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        if not (state.kb_stage and state.clusters):
-            return
-        tickets_by_id = {t.ticket_id: t for t in state.tickets}
-        items, pv = coverage_check(
-            state.clusters, tickets_by_id, state.kb_stage, self._clients.llm, self._config
-        )
-        state.coverage = items
-        from kb_agent.models import CoverageStatus
-
-        state.metrics.gaps_flagged = sum(1 for i in items if i.status == CoverageStatus.GAP)
-        manifest.record_model_call(self._clients.llm.model_id, "coverage", pv)
-
-    def _stage_draft_article(
-        self,
-        ai: AgentInput,
-        state: PipelineState,
-        manifest: RunManifest,
-        golden: list[dict] | None,
-    ) -> None:
-        if not state.clusters:
-            return
-        # Drafting is gated on the coverage result: only gaps/partials are drafted
-        # (spec 4.4). state.coverage is populated by the coverage_check stage,
-        # which runs before this one in STAGE_ORDER.
-        outcomes, pv = draft_articles(
-            state.clusters, state.labels, state.tickets, state.coverage,
-            run_id=ai.run_id,
-            llm=self._clients.llm, guardrail=self._clients.guardrail,
-            store=self._clients.store, config=self._config,
-        )
-        state.drafts = outcomes
-        manifest.record_model_call(self._clients.llm.model_id, "drafting", pv)
+    # --- DORMANT: _stage_kb_retrieve, _stage_coverage_check, _stage_draft_article
+    # moved to kb_agent.dormant.pipeline_stages.DormantStagesMixin (not dispatched).
 
     def _stage_write_report(
         self,
@@ -662,8 +666,12 @@ class Pipeline:
     # --- finalisation --------------------------------------------------------
 
     def _finalise(self, run_id: str, state: PipelineState, manifest: RunManifest) -> dict[str, str]:
-        """Write the report (MD+JSON) and register review state (spec 2.2, 4.4)."""
-        registry = ReviewRegistry()
+        """Write the report (MD+JSON). KB-only: no review registry (A4).
+
+        DORMANT: the ReviewRegistry / article-review wiring moved out with the
+        join stages; the KB-only workflow has no approval step, so ``manifest``
+        carries no review_records and no draft artefacts are registered.
+        """
         report = getattr(state, "_report", None)
         artifacts: dict[str, str] = {}
 
@@ -676,17 +684,7 @@ class Pipeline:
             )
             artifacts["report"] = md_uri
             artifacts["report_json"] = json_uri
-            registry.register("report", "report", uri=md_uri)
 
-        for outcome in state.drafts:
-            if outcome.drafted and outcome.article:
-                registry.register(
-                    outcome.article.article_id, "article",
-                    model_id=outcome.article.model_id,
-                    prompt_version=outcome.article.prompt_version,
-                )
-
-        manifest.review_records = registry.to_records()
         manifest.artifacts = artifacts
         return artifacts
 
@@ -703,18 +701,42 @@ class Pipeline:
             return
         kb = state.kb_stage
         ingestion = getattr(state, "_ingestion", {}) or {}
+        prov = getattr(state, "_provisioning", None)
+        outcomes = getattr(state, "_file_outcomes", []) or []
+        vector_store_block: dict[str, Any] | None = None
+        provisioning_steps: list[dict] = []
+        if prov is not None:
+            vector_store_block = {
+                "type": self._config.vector_store.type,
+                "bucket": prov.vector_bucket,
+                "index_name": prov.index_name,
+                "index_arn": prov.index_arn,
+                "dimension": prov.dimension,
+                "distance_metric": prov.distance_metric,
+            }
+            provisioning_steps = prov.steps
         payload = {
+            "project_id": getattr(state, "_project_id", None),
             "knowledge_base_id": getattr(kb, "kb_id", None) if kb else None,
             "data_source_id": getattr(kb, "data_source_id", None) if kb else None,
-            "vector_bucket": None,
-            "index_name": None,
+            "vector_store": vector_store_block,
+            # Back-compat flat fields some readers still use.
+            "vector_bucket": prov.vector_bucket if prov else None,
+            "index_name": prov.index_name if prov else None,
             "embedding_model": getattr(self._clients.embeddings, "model_id", None),
             "chunking": {
-                "strategy": self._config.knowledge_base.chunking_strategy,
+                "strategy": (
+                    getattr(state, "_chunking_strategy", None)
+                    or self._config.knowledge_base.chunking_strategy
+                ),
                 "parent_tokens": 1500, "child_tokens": 300, "overlap_tokens": 60,
             },
+            "provisioning": provisioning_steps,
             "routing": getattr(state, "_routing", []),
+            # Per-file outcomes (names/statuses/routes only; B3.5 / B5.2).
+            "files": [o.model_dump() for o in outcomes],
             "ingestion": {
+                "job_id": ingestion.get("job_id"),
                 "scanned": ingestion.get("scanned"),
                 "indexed": ingestion.get("indexed"),
                 "modified": ingestion.get("modified"),
@@ -749,21 +771,73 @@ class Pipeline:
             sample = {"chunks": [], "error": "unavailable"}
         self._rs.vectors_sample(sample)
 
+    def _write_binding(self, ai: AgentInput, state: PipelineState, ingestion: dict) -> None:
+        """Build + write knowledge_binding.json (run + project copies; B5.3).
 
-def _silhouette_excluding_noise(reduced: Any, labels: list[int]) -> float | None:
-    """Silhouette score over clustered points only (noise -1 excluded; spec 1.5).
+        Best-effort: a binding-write failure is logged but never fails the run.
+        The run uri is stashed on state for AgentOutput.knowledge_binding_uri.
+        """
+        from kb_agent.binding import build_binding, write_binding
 
-    Returns None when silhouette is undefined (fewer than 2 clusters remain after
-    dropping noise), so the report shows 'n/a' rather than a misleading number.
-    Computed directly via sklearn so the runtime pipeline does not depend on the
-    ``evals`` package (evals depends on src, not the reverse).
-    """
-    import numpy as np
-    from sklearn.metrics import silhouette_score
+        kb = state.kb_stage
+        prov = getattr(state, "_provisioning", None)
+        project_id = getattr(state, "_project_id", None) or ai.run_id
+        settings = get_settings()
+        chunking_strategy = getattr(state, "_chunking_strategy", None) or (
+            self._config.knowledge_base.chunking_strategy
+        )
+        if prov is not None:
+            vector_store = {
+                "type": self._config.vector_store.type,
+                "bucket": prov.vector_bucket, "index_name": prov.index_name,
+                "index_arn": prov.index_arn, "dimension": prov.dimension,
+                "distance_metric": prov.distance_metric,
+            }
+            kb_block = {
+                "id": prov.knowledge_base_id, "arn": None,
+                "name": prov.index_name, "data_source_id": prov.data_source_id,
+                "status": "ACTIVE",
+            }
+        else:
+            v = self._config.vector_store
+            vector_store = {
+                "type": v.type, "bucket": self._config.provisioning.vector_bucket_name,
+                "index_name": None, "index_arn": settings.vector_index_arn or None,
+                "dimension": v.dimension, "distance_metric": v.distance_metric,
+            }
+            kb_block = {
+                "id": getattr(kb, "kb_id", None) if kb else None, "arn": None,
+                "name": None, "data_source_id": getattr(kb, "data_source_id", None) if kb else None,
+                "status": "ACTIVE",
+            }
+        try:
+            binding = build_binding(
+                project_id=project_id, run_id=ai.run_id, created_at=_utcnow_iso(),
+                region=ai.region or settings.aws_region, account_id=None,
+                status="ready",
+                knowledge_base=kb_block, vector_store=vector_store,
+                embedding_model_id=settings.embedding_model_id,
+                chunking={
+                    "strategy": chunking_strategy,
+                    "parent_tokens": 1500, "child_tokens": 300, "overlap_tokens": 60,
+                },
+                source={
+                    "bucket": settings.s3_bucket,
+                    "kb_prefix": getattr(state, "_kb_prefix", f"runs/{ai.run_id}/kb-docs") + "/",
+                },
+                ingestion={
+                    "job_id": ingestion.get("job_id"),
+                    "scanned": ingestion.get("scanned"),
+                    "indexed": ingestion.get("indexed"),
+                    "failed": ingestion.get("failed"),
+                },
+                outcomes=getattr(state, "_file_outcomes", []) or [],
+            )
+            uri = write_binding(self._clients.store, binding)
+            state._binding_uri = uri  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 - binding is best-effort
+            logger.warning("binding_write_failed", error=str(exc))
 
-    arr = np.asarray(reduced)
-    mask = np.array([lbl != -1 for lbl in labels])
-    kept_labels = [lbl for lbl in labels if lbl != -1]
-    if len({*kept_labels}) < 2 or len(kept_labels) <= len({*kept_labels}):
-        return None
-    return round(float(silhouette_score(arr[mask], kept_labels, metric="euclidean")), 4)
+# DORMANT: _silhouette_excluding_noise moved to
+# kb_agent.dormant.pipeline_stages (it is used only by the dormant
+# _stage_intent_cluster, and was the sole reason this module imported sklearn).

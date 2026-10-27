@@ -45,9 +45,12 @@ def test_pipeline_does_not_ingest_readme() -> None:
     )
     Pipeline(cs, CONFIG).run(ai, golden=[])
 
-    # Only manual.md should have been normalised into the KB prefix.
+    # Only manual.md should have been staged into the KB prefix (README is
+    # ignored as bookkeeping). With Part B provisioning the KB prefix is the
+    # project prefix, so search every kb-docs key regardless of root.
     kb_docs = [
-        k for k in cs.store.list_keys("runs/r/kb-docs") if k.endswith(".md")
+        k for k in cs.store.list_keys("")
+        if "/kb-docs/" in k and k.endswith(".md") and not k.endswith(".metadata.json")
     ]
     assert any("manual" in k for k in kb_docs)
     assert not any("README" in k for k in kb_docs)

@@ -30,3 +30,5 @@ web/config.js
 docs/deployment-facts.md
 # Backend Lambda build artifacts (regenerated from source; never commit)
 deploy/backend/*.zip
+# Packaged component hand-off artifact (regenerated on demand; never commit)
+kb-integration-agent.zip

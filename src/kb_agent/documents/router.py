@@ -45,6 +45,21 @@ def _condition_matches(when: dict[str, Any], f: DocumentFeatures, config: AppCon
         if key == "always":
             if not expected:
                 return False
+        elif key == "format":
+            if f.format != expected:
+                return False
+        elif key == "format_in":
+            if f.format not in set(expected):
+                return False
+        elif key == "size_bytes_eq":
+            if f.size_bytes != int(expected):
+                return False
+        elif key == "size_mb_gt":
+            if not (f.size_bytes > float(expected) * 1024 * 1024):
+                return False
+        elif key == "size_mb_lte":
+            if not (f.size_bytes <= float(expected) * 1024 * 1024):
+                return False
         elif key == "mime":
             if short_mime != expected:
                 return False
@@ -101,6 +116,8 @@ def route_document(
     """
     rules = rules if rules is not None else load_routing_rules()
     feature_dump: dict[str, float | int | bool | str] = {
+        "format": features.format,
+        "size_bytes": features.size_bytes,
         "mime": features.detected_mime,
         "min_page_chars": features.min_page_chars if features.min_page_chars is not None else -1,
         "max_image_area_ratio": features.max_page_image_area_ratio,

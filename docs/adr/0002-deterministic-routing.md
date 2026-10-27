@@ -28,7 +28,7 @@ stages the spec explicitly forbids using a model for (spec 2.1).
   route and the same ``rule_id`` in the audit log, so a misroute is debuggable.
   An LLM is non-deterministic and cannot guarantee this.
 - **Every signal is locally measurable.** True MIME (python-magic), per-page char
-  counts and image-area ratio (PyMuPDF), table counts (pdfplumber), multi-column
+  counts, image-area ratio and table counts (pdfplumber), multi-column
   layout, DOCX embedded images / merged cells (python-docx) - none of these need
   a model.
 - **Cost and latency.** An LLM call per file is slow and billable for a decision

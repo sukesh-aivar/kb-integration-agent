@@ -23,7 +23,22 @@ Status legend: OPEN = unanswered · PLACEHOLDER = code runs on a flagged default
 | 10 | Is DynamoDB approved for run/review state, or S3-only? | Solution Architect / InfoSec | `review/state.py` | OPEN | not yet wired (no state store this pass) |
 | 11 | Exact embedding + Claude model IDs to pin | Solution Architect | config | PLACEHOLDER | `embedding_model_id`, `llm_model_id` defaults in `config.py`/`.env.example` |
 | 12 | How much autonomy - is the thin planner wanted, or deterministic workflow enough? | Manager | section 6 scope | OPEN | **planner intentionally NOT built this pass; awaiting answer** |
-| 13 | Is PyMuPDF's AGPL licence acceptable in a commercial deliverable? | Engagement Lead / legal | dependency choice | OPEN | `pymupdf` pinned in `requirements.txt`; keep behind an interface so it can be swapped for `pypdf`+`pdfplumber` |
+| 13 | Is PyMuPDF's AGPL licence acceptable in a commercial deliverable? | Engagement Lead / legal | dependency choice | RESOLVED (Part B) | AGPL rejected; `fitz` removed from the runtime. PDF reading consolidated onto `pdfplumber` (MIT); `pymupdf` moved to `requirements-dev.txt` (dev fixture generator only). See the "PDF library licensing" section below. |
+
+## Part B (Phase 2) open questions — logged at Checkpoint B1 (see docs/phase2-design.md §8)
+
+| # | Question | Owner | Status | Notes |
+|---|---|---|---|---|
+| B1 | Default `source.max_files` and any total-size cap | Manager | OPEN | default 100; KB ingestion job supports up to 1,000 files (BDA parser) |
+| B2 | Exact `vector_store` strings the consumer's dropdown sends | Integrator | OPEN | normalisation (lowercase, non-alnum→`_`) covers variants; only `s3_vectors` accepted, else HTTP 400 `unsupported_vector_store` |
+| B3 | Does the backend status mapping accept `completed`? | Kiro (read-only) | RESOLVED | YES. `web/api.js` `adaptStatus` maps any non-`failed` finished status to the UI's `complete`; `needs_review` and `completed` render identically. The flip is safe; the legacy flag stays for other 13-step consumers. |
+| B4 | Is TIFF wanted? (BDA accepts it; not currently routed) | Manager | OPEN | leave out per spec; add a routing rule later if wanted |
+| B5 | CSV and XLSX retrieval behaviour through the KB parser | Human (integration script) | OPEN | CSV parsed one row at a time, one content field, other columns → string metadata; usability confirmed by `scripts/integration_mixed_formats.py`, not assumed |
+| B6 | KB name pattern/length; tagging support per resource; delete order & vector behaviour | Kiro (docs) | RESOLVED | KB name ≤128, data source name ≤200; cleanup deletes DS→KB→index; default data deletion policy `DELETE` removes vectors (bucket itself retained); on a failed KB delete switch the DS to `RETAIN` then retry |
+| B7 | BDA account concurrency quota; runtime ephemeral disk size | Kiro / Human | OPEN | defaults: `bda_concurrency=3`, stream-to-temp + delete per task; confirm the account quota and AgentCore ephemeral disk |
+| B8 | Per-document ingestion-failure reporting for S3 data sources | Kiro (docs) | RESOLVED (limitation) | API gives aggregate `IngestionJobStatistics` + a `failureReasons` LIST only; no per-document-key map (CloudWatch only). Record stats + reasons; run-level warning when `numberOfDocumentsFailed > 0` |
+| B9 | Re-uploads: should removing a file from the source remove it from the KB? | Manager | OPEN | additive by default; KB sync is incremental (adds/modifies/deletes since last sync) |
+| B10 | Is `iam:PassRole` on a single shared KB role acceptable to security? | Human | OPEN | one KB service role, Bedrock-conditioned; the agent creates NO IAM roles; shared role = weaker per-project isolation (documented trade-off) |
 
 ## Additional placeholders introduced during scaffolding
 
@@ -298,3 +313,44 @@ never `f"s3://{key}"`). Added regression test
 `tests/unit/test_runstate.py::test_bda_input_uri_keeps_the_bucket_name`. Rebuilt
 `:v4` (ARM64), pushed to ECR, updated runtime; re-ran the exact failing input →
 `needs_review`, BDA parsed 1 page. 158+1 tests pass, ruff+mypy clean.
+
+
+## PDF library licensing — PyMuPDF (AGPL) replacement (decided at Part A / Checkpoint A1 review)
+
+**Finding (verify item, rule 10):** `documents/features.py` currently extracts PDF geometry with
+**PyMuPDF (`fitz`)**, which is **AGPL-3.0** (also sold under a commercial PyMuPDF license by Artifex).
+AGPL is not a permissible license for this product, so `fitz` must be removed.
+
+**Decision — consolidate onto `pdfplumber`:**
+- `pdfplumber` is **MIT** (its engine `pdfminer.six` is MIT/X), **already a project dependency**, and
+  already performs the table counting in `_count_pdf_tables`. Its rendering dep `pypdfium2` is
+  **Apache-2.0 / BSD-3-Clause** (Google PDFium) — fully permissive.
+- Verified from the installed environment that pdfplumber exposes everything `features.py` needs:
+  `len(pdf.pages)` (page count), `page.extract_text()` (per-page chars), `page.images` with bounding
+  boxes (image-area ratio), `page.extract_words()` / `page.chars` bounding boxes (multi-column
+  heuristic, replacing fitz `get_text("blocks")`), and a `password=` parameter + raised exceptions on
+  encrypted/corrupt PDFs (the `pdf_encrypted_or_unreadable` signal).
+- Net: **drop `fitz`/PyMuPDF entirely; no new library required.** pypdfium2 arrives transitively via
+  pdfplumber.
+
+Sources (rephrased for licensing compliance):
+- pdfplumber (MIT, low-level char/rect/image + table API): https://pypi.org/project/pdfplumber/0.11.8/
+- pypdfium2 (Apache-2.0 / BSD-3-Clause, PyMuPDF replacement): https://www.pypi.org/project/pypdfium2 ,
+  https://github.com/pypdfium2-team
+
+**Scope / status: RESOLVED in Part B (2026-10-15).** Q13 is closed. What shipped:
+1. `_extract_pdf_features` and `_looks_multi_column` were rewritten onto pdfplumber in a single parse
+   (page count, per-page chars, image-area ratio from `page.images` bboxes, `find_tables()`, and a
+   `page.extract_words()` x-position multi-column heuristic). The `import fitz` path and the
+   `pymupdf_unavailable` branch are gone; `features.py` no longer imports `fitz`.
+2. `pymupdf` was removed from `requirements.txt`. pdfplumber (+ its transitive pdfminer.six / Pillow /
+   pypdfium2) remain and are all permissively licensed. The active ARM64 image was rebuilt and verified
+   to NOT install pymupdf.
+3. Tests: the PDF feature/routing fixtures (`tests/unit/test_features_and_router.py`,
+   `tests/unit/test_runstate.py`) no longer use `fitz`. A tiny pure-Python PDF writer
+   (`tests/pdf_fixtures.py`) builds the text/scanned fixtures (no AGPL, no new dependency), and the same
+   routing assertions (DEFAULT for a text PDF, BDA rule 6 for a text-free/scanned PDF) pass unchanged.
+4. The only remaining PyMuPDF user is the DEV-ONLY sample-pack generator
+   (`sample_pack/fetch_documents.py`), which rasterises scanned/degraded PDFs — genuine image synthesis
+   the read-only runtime stack cannot do. `pymupdf` now lives in `requirements-dev.txt` for that purpose;
+   it is never installed in the runtime image, and the agent never imports `fitz`.

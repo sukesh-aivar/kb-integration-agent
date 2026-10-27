@@ -13,6 +13,7 @@ config/settings - never hard-coded (spec 7.4). Several of those are still
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -68,7 +69,13 @@ class S3ObjectStore:
         return f"s3://{self._bucket}/{key}"
 
     def put_bytes(self, key: str, data: bytes) -> str:
-        _retry(lambda: self._s3.put_object(Bucket=self._bucket, Key=key, Body=data))
+        # Store the content hash as S3 user metadata so head()/skip-unchanged can
+        # compare without re-downloading the object (B3.2 step 8).
+        chash = hashlib.sha256(data).hexdigest()
+        _retry(lambda: self._s3.put_object(
+            Bucket=self._bucket, Key=key, Body=data,
+            Metadata={"content_hash": chash},
+        ))
         return self._uri(key)
 
     def put_text(self, key: str, text: str) -> str:
@@ -103,6 +110,143 @@ class S3ObjectStore:
                 break
             token = resp.get("NextContinuationToken")
         return sorted(keys)
+
+    # --- Part B additions ----------------------------------------------------
+
+    @staticmethod
+    def _split(uri: str) -> tuple[str, str]:
+        """Split ``s3://bucket/key`` -> (bucket, key)."""
+        rest = uri[len("s3://"):]
+        bucket, _, key = rest.partition("/")
+        return bucket, key
+
+    def head(self, key: str) -> dict[str, str] | None:  # pragma: no cover
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = _retry(lambda: self._s3.head_object(Bucket=self._bucket, Key=key))
+        except ClientError:
+            return None
+        return dict(resp.get("Metadata", {}))
+
+    def copy(self, src_uri: str, dst_key: str) -> str:  # pragma: no cover
+        if src_uri.startswith("s3://"):
+            src_bucket, src_key = self._split(src_uri)
+        else:
+            src_bucket, src_key = self._bucket, src_uri
+        _retry(lambda: self._s3.copy_object(
+            Bucket=self._bucket, Key=dst_key,
+            CopySource={"Bucket": src_bucket, "Key": src_key},
+        ))
+        return self._uri(dst_key)
+
+    def put_if_absent(self, key: str, data: bytes) -> bool:  # pragma: no cover
+        """Conditional write with If-None-Match: * (S3 conditional writes, 2024).
+
+        Returns True if written; False if the key already existed (HTTP 412
+        PreconditionFailed). The primitive behind the project lock (B4.4).
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            _retry(lambda: self._s3.put_object(
+                Bucket=self._bucket, Key=key, Body=data, IfNoneMatch="*",
+            ))
+            return True
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("PreconditionFailed", "412"):
+                return False
+            raise
+
+    def list_uri(self, uri: str) -> list[str]:  # pragma: no cover
+        bucket, prefix = self._split(uri) if uri.startswith("s3://") else (self._bucket, uri)
+        keys: list[str] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = _retry(partial(self._s3.list_objects_v2, **kwargs))
+            keys.extend(obj["Key"] for obj in resp.get("Contents", []))
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+        return [f"s3://{bucket}/{k}" for k in sorted(keys)]
+
+    def delete(self, key: str) -> None:  # pragma: no cover
+        _retry(lambda: self._s3.delete_object(Bucket=self._bucket, Key=key))
+
+
+class S3VectorsAdmin:  # pragma: no cover
+    """Real S3 Vectors control-plane over the boto3 ``s3vectors`` client (B4.2).
+
+    Create-or-verify only; never updates an existing index (its dimension /
+    metric / non-filterable keys are immutable). ``get_index`` returns the stored
+    config so the provisioner can detect a mismatch.
+    """
+
+    def __init__(self, s3vectors_client: Any) -> None:
+        self._c = s3vectors_client
+
+    def ensure_vector_bucket(self, name: str) -> str:
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = _retry(lambda: self._c.get_vector_bucket(vectorBucketName=name))
+            return resp.get("vectorBucket", {}).get("vectorBucketArn", name)
+        except ClientError:
+            # Create; tolerate a concurrent-create conflict by re-reading.
+            try:
+                _retry(lambda: self._c.create_vector_bucket(vectorBucketName=name))
+            except ClientError:
+                pass
+            resp = _retry(lambda: self._c.get_vector_bucket(vectorBucketName=name))
+            return resp.get("vectorBucket", {}).get("vectorBucketArn", name)
+
+    def get_index(self, bucket: str, name: str) -> dict | None:
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = _retry(lambda: self._c.get_index(vectorBucketName=bucket, indexName=name))
+        except ClientError:
+            return None
+        idx = resp.get("index", {})
+        md = idx.get("metadataConfiguration", {})
+        return {
+            "arn": idx.get("indexArn"),
+            "name": idx.get("indexName", name),
+            "dimension": idx.get("dimension"),
+            "distance_metric": idx.get("distanceMetric"),
+            "data_type": idx.get("dataType"),
+            "non_filterable_keys": list(md.get("nonFilterableMetadataKeys", [])),
+        }
+
+    def create_index(
+        self, bucket: str, name: str, *, dimension: int, distance_metric: str,
+        data_type: str, non_filterable_keys: list[str],
+    ) -> dict:
+        _retry(lambda: self._c.create_index(
+            vectorBucketName=bucket, indexName=name,
+            dataType=data_type, dimension=dimension, distanceMetric=distance_metric,
+            metadataConfiguration={"nonFilterableMetadataKeys": list(non_filterable_keys)},
+        ))
+        got = self.get_index(bucket, name)
+        if got is None:
+            raise RuntimeError(f"index {name} not found immediately after create")
+        return got
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:
+        from botocore.exceptions import ClientError
+
+        try:
+            _retry(lambda: self._c.tag_resource(
+                resourceArn=arn, tags=dict(tags)))
+        except ClientError:
+            pass  # tagging is best-effort; never fail provisioning on it
+
+    def delete_index(self, bucket: str, name: str) -> None:
+        _retry(lambda: self._c.delete_index(vectorBucketName=bucket, indexName=name))
 
 
 class BedrockDataAutomation:
@@ -450,6 +594,116 @@ class BedrockKnowledgeBase:
                 )
             )
         return passages
+
+    # --- Part B: create-or-verify provisioning (B4.2) ------------------------
+
+    def find_knowledge_base(self, name: str) -> dict | None:  # pragma: no cover
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"maxResults": 100}
+            if token:
+                kwargs["nextToken"] = token
+            resp = _retry(partial(self._agent.list_knowledge_bases, **kwargs))
+            for s in resp.get("knowledgeBaseSummaries", []):
+                if s.get("name") == name:
+                    return {"id": s["knowledgeBaseId"], "name": name, "status": s.get("status")}
+            token = resp.get("nextToken")
+            if not token:
+                return None
+
+    def get_knowledge_base(self, kb_id: str) -> dict | None:  # pragma: no cover
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = _retry(lambda: self._agent.get_knowledge_base(knowledgeBaseId=kb_id))
+        except ClientError:
+            return None
+        kb = resp["knowledgeBase"]
+        storage = kb.get("storageConfiguration", {}).get("s3VectorsConfiguration", {})
+        vector_cfg = kb.get("knowledgeBaseConfiguration", {}).get(
+            "vectorKnowledgeBaseConfiguration", {}
+        )
+        return {
+            "id": kb_id,
+            "name": kb.get("name"),
+            "status": kb.get("status"),
+            "index_arn": storage.get("indexArn"),
+            "embedding_model_arn": vector_cfg.get("embeddingModelArn"),
+        }
+
+    def list_data_sources(self, kb_id: str) -> list[dict]:  # pragma: no cover
+        out: list[dict] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"knowledgeBaseId": kb_id, "maxResults": 100}
+            if token:
+                kwargs["nextToken"] = token
+            resp = _retry(partial(self._agent.list_data_sources, **kwargs))
+            for s in resp.get("dataSourceSummaries", []):
+                out.append({"id": s["dataSourceId"], "name": s.get("name")})
+            token = resp.get("nextToken")
+            if not token:
+                return out
+
+    def find_or_create_data_source(  # pragma: no cover
+        self, kb_id: str, name: str, *, inclusion_prefix: str,
+        chunking_strategy: str, data_deletion_policy: str,
+    ) -> dict:
+        for ds in self.list_data_sources(kb_id):
+            if ds["name"] == name:
+                self._data_source_id = ds["id"]
+                return ds
+        resp = _retry(lambda: self._agent.create_data_source(
+            knowledgeBaseId=kb_id, name=name,
+            dataSourceConfiguration={
+                "type": "S3",
+                "s3Configuration": {
+                    "bucketArn": f"arn:aws:s3:::{self._bucket}",
+                    "inclusionPrefixes": [inclusion_prefix],
+                },
+            },
+            vectorIngestionConfiguration={
+                "chunkingConfiguration": _chunking_config(chunking_strategy)
+            },
+            dataDeletionPolicy=data_deletion_policy,
+        ))
+        ds = resp["dataSource"]
+        self._data_source_id = ds["dataSourceId"]
+        return {"id": ds["dataSourceId"], "name": name}
+
+    def create_kb_record(  # pragma: no cover
+        self, name: str, *, index_arn: str, embedding_model_arn: str
+    ) -> str:
+        """Create a KB bound to an existing S3 Vectors index; wait ACTIVE."""
+        kb = _retry(lambda: self._agent.create_knowledge_base(
+            name=name, roleArn=self._role_arn,
+            knowledgeBaseConfiguration={
+                "type": "VECTOR",
+                "vectorKnowledgeBaseConfiguration": {"embeddingModelArn": embedding_model_arn},
+            },
+            storageConfiguration={
+                "type": "S3_VECTORS",
+                "s3VectorsConfiguration": {"indexArn": index_arn},
+            },
+        ))
+        kb_id = kb["knowledgeBase"]["knowledgeBaseId"]
+        self._wait_for_kb_active(kb_id)
+        return kb_id
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:  # pragma: no cover
+        from botocore.exceptions import ClientError
+
+        try:
+            _retry(lambda: self._agent.tag_resource(resourceArn=arn, tags=dict(tags)))
+        except ClientError:
+            pass  # best-effort
+
+    def delete_knowledge_base(self, kb_id: str) -> None:  # pragma: no cover
+        _retry(lambda: self._agent.delete_knowledge_base(knowledgeBaseId=kb_id))
+
+    def delete_data_source(self, kb_id: str, data_source_id: str) -> None:  # pragma: no cover
+        _retry(lambda: self._agent.delete_data_source(
+            knowledgeBaseId=kb_id, dataSourceId=data_source_id))
 
 
 def _map_ingestion_stats(statistics: dict[str, Any]) -> dict[str, Any]:

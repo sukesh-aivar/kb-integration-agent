@@ -26,6 +26,12 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Dormant tests put `pytestmark = pytest.mark.dormant` before their imports on
+# purpose (so collection is marked before heavy dormant imports run); that trips
+# E402 (module-level import not at top). Intentional for these files only.
+"tests/dormant/*" = ["E402"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_unused_configs = true
@@ -37,5 +43,6 @@ testpaths = ["tests", "evals"]
 markers = [
     "aws: marks tests that require live AWS access (skipped by default, see Makefile test-all)",
     "slow: slower end-to-end tests (e.g. clustering the full sample pack); still offline",
+    "dormant: tests for dormant (not-wired) code; run on demand via `make test-dormant`",
 ]
-addopts = "-m 'not aws'"
+addopts = "-m 'not aws and not dormant'"

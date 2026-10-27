@@ -31,11 +31,12 @@ class ReviewStatus(str, Enum):
 
 
 class Route(str, Enum):
-    """Document routing outcomes (spec 4.2 rule table)."""
+    """Document routing outcomes (spec 4.2 rule table; Part B adds CONVERT)."""
 
-    DEFAULT = "DEFAULT"
-    BDA = "BDA"
-    REJECT = "REJECT"
+    DEFAULT = "DEFAULT"  # copy the original to the KB prefix; Bedrock's parser handles it
+    BDA = "BDA"  # Bedrock Data Automation (scanned / layout-heavy / images)
+    CONVERT = "CONVERT"  # agent extracts deterministically, then the KB parser ingests it
+    REJECT = "REJECT"  # unsupported / unreadable / over-limit; recorded with a reason
 
 
 class SourceType(str, Enum):

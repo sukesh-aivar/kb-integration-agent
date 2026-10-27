@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-integration-agent/schemas/file_outcome.v1.schema.json",
+  "title": "Per-file outcome record",
+  "description": "One entry per discovered source object (Part B B3.5).",
+  "type": "object",
+  "required": ["name", "source_uri", "status"],
+  "properties": {
+    "name": { "type": "string" },
+    "source_uri": { "type": "string" },
+    "size": { "type": "integer" },
+    "format": { "type": "string" },
+    "route": { "type": ["string", "null"], "enum": ["default", "bda", "convert", "reject", null] },
+    "rule_id": { "type": ["integer", "null"] },
+    "reason": { "type": "string" },
+    "pages": { "type": ["integer", "null"] },
+    "content_hash": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["staged", "ingested", "rejected", "failed", "skipped_duplicate", "unchanged", "ignored"]
+    },
+    "status_reason": { "type": ["string", "null"] },
+    "kb_key": { "type": ["string", "null"] },
+    "extraction_uri": { "type": ["string", "null"] },
+    "bda_cached": { "type": ["boolean", "null"] },
+    "part_count": { "type": ["integer", "null"] }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-integration-agent/schemas/started.v1.schema.json",
+  "title": "runs/{run_id}/_started.json",
+  "type": "object",
+  "required": ["run_id", "started_at", "agent_version", "stage_order", "skipped", "inputs"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "owner_id": { "type": ["string", "null"] },
+    "started_at": { "type": "string" },
+    "agent_version": { "type": "string" },
+    "stage_order": { "type": "array", "items": { "type": "string" } },
+    "skipped": { "type": "object", "additionalProperties": { "type": "string" } },
+    "inputs": { "type": "object" },
+    "project_id": { "type": ["string", "null"] },
+    "source_uri": { "type": ["string", "null"] },
+    "vector_store": { "type": ["string", "null"] }
+  }
+}

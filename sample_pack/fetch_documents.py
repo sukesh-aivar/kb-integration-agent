@@ -15,6 +15,17 @@ It is a one-shot preparation helper, NOT part of the agent runtime. Re-running i
 is safe (it overwrites the generated files). It does NOT fabricate content - it
 only converts real, licensed source documents.
 
+.. note::
+
+    DEV-ONLY, requires PyMuPDF (``pip install -r requirements-dev.txt``). The
+    scanned/degraded-PDF fixtures are produced by rasterising text to a pixmap
+    with added noise and skew - that is genuine image synthesis, which the
+    runtime's read-only PDF stack (pdfplumber/pdfminer.six) cannot do. PyMuPDF
+    was removed from the agent runtime in Part B (it is no longer in
+    requirements.txt and is excluded from the image), so it now lives in
+    requirements-dev.txt purely for regenerating these committed fixtures. The
+    agent itself never imports ``fitz``.
+
 Rocket.Chat was intentionally NOT bundled: its docs repo is archived with no
 declared licence, so redistribution rights are unclear (recorded in LICENSES.md).
 

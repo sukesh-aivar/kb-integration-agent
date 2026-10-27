@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-integration-agent/schemas/knowledge_binding.v1.schema.json",
+  "title": "knowledge_binding.json",
+  "description": "The handover contract a downstream agent binds to (Part B B5.3).",
+  "type": "object",
+  "required": [
+    "contract_version", "project_id", "run_id", "created_at", "status",
+    "region", "knowledge_base", "vector_store", "embedding_model_id",
+    "chunking", "source", "ingestion", "documents"
+  ],
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "project_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "status": { "type": "string", "enum": ["ready", "failed"] },
+    "region": { "type": "string" },
+    "account_id": { "type": ["string", "null"] },
+    "knowledge_base": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": ["string", "null"] },
+        "arn": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "data_source_id": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] }
+      }
+    },
+    "vector_store": {
+      "type": "object",
+      "required": ["type", "dimension", "distance_metric"],
+      "properties": {
+        "type": { "type": "string" },
+        "bucket": { "type": ["string", "null"] },
+        "index_name": { "type": ["string", "null"] },
+        "index_arn": { "type": ["string", "null"] },
+        "dimension": { "type": "integer" },
+        "distance_metric": { "type": "string" }
+      }
+    },
+    "embedding_model_id": { "type": "string" },
+    "chunking": {
+      "type": "object",
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "type": "string" },
+        "parent_tokens": { "type": "integer" },
+        "child_tokens": { "type": "integer" },
+        "overlap_tokens": { "type": "integer" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "bucket": { "type": ["string", "null"] },
+        "kb_prefix": { "type": ["string", "null"] }
+      }
+    },
+    "ingestion": {
+      "type": "object",
+      "properties": {
+        "job_id": { "type": ["string", "null"] },
+        "scanned": { "type": ["integer", "null"] },
+        "indexed": { "type": ["integer", "null"] },
+        "failed": { "type": ["integer", "null"] }
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "format", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "format": { "type": "string" },
+          "route": { "type": ["string", "null"] },
+          "status": { "type": "string" },
+          "status_reason": { "type": ["string", "null"] },
+          "extraction_uri": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

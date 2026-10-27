@@ -1,0 +1,256 @@
+[
+  {
+    "seq": 0,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "run_started",
+    "stage": null,
+    "text": "Run created",
+    "data": {
+      "skipped": [
+        "load_tickets",
+        "adapt_tickets",
+        "clean_tickets",
+        "embed_texts",
+        "intent_cluster",
+        "name_clusters",
+        "coverage_check",
+        "draft_article",
+        "kb_retrieve"
+      ]
+    }
+  },
+  {
+    "seq": 1,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "load_tickets",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 2,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "adapt_tickets",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 3,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "clean_tickets",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 4,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "embed_texts",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 5,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "intent_cluster",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 6,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "name_clusters",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 7,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "coverage_check",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 8,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "draft_article",
+    "text": "No ticket export uploaded",
+    "data": {}
+  },
+  {
+    "seq": 9,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_skipped",
+    "stage": "kb_retrieve",
+    "text": "Runs only when a question set is supplied",
+    "data": {}
+  },
+  {
+    "seq": 10,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_started",
+    "stage": "normalize_docs",
+    "text": "Reading and parsing documents",
+    "data": {}
+  },
+  {
+    "seq": 11,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "normalize_docs",
+    "text": "Routing faq.md to the default parser (rule 1: Plain text / markdown / html / csv need no heavy parsing.)",
+    "data": {}
+  },
+  {
+    "seq": 12,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "normalize_docs",
+    "text": "Routing installation.md to the default parser (rule 1: Plain text / markdown / html / csv need no heavy parsing.)",
+    "data": {}
+  },
+  {
+    "seq": 13,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "normalize_docs",
+    "text": "Routing quota.md to the default parser (rule 1: Plain text / markdown / html / csv need no heavy parsing.)",
+    "data": {}
+  },
+  {
+    "seq": 14,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "normalize_docs",
+    "text": "Routing conflicts.html to the default parser (rule 1: Plain text / markdown / html / csv need no heavy parsing.)",
+    "data": {}
+  },
+  {
+    "seq": 15,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "normalize_docs",
+    "text": "Parsed 4 files: 0 with Bedrock Data Automation, 4 with the default parser",
+    "data": {}
+  },
+  {
+    "seq": 16,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_done",
+    "stage": "normalize_docs",
+    "text": "Reading and parsing documents",
+    "data": {
+      "duration_sec": "<MASKED>"
+    }
+  },
+  {
+    "seq": 17,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_started",
+    "stage": "kb_create",
+    "text": "Creating the knowledge base",
+    "data": {}
+  },
+  {
+    "seq": 18,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "kb_create",
+    "text": "Knowledge base created",
+    "data": {}
+  },
+  {
+    "seq": 19,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_done",
+    "stage": "kb_create",
+    "text": "Creating the knowledge base",
+    "data": {
+      "duration_sec": "<MASKED>"
+    }
+  },
+  {
+    "seq": 20,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_started",
+    "stage": "kb_ingest",
+    "text": "Indexing content",
+    "data": {}
+  },
+  {
+    "seq": 21,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "kb_ingest",
+    "text": "Ingestion started",
+    "data": {}
+  },
+  {
+    "seq": 22,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "info",
+    "stage": "kb_ingest",
+    "text": "Ingestion complete: 4 documents indexed",
+    "data": {}
+  },
+  {
+    "seq": 23,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_done",
+    "stage": "kb_ingest",
+    "text": "Indexing content",
+    "data": {
+      "duration_sec": "<MASKED>"
+    }
+  },
+  {
+    "seq": 24,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_started",
+    "stage": "write_report",
+    "text": "Writing the report",
+    "data": {}
+  },
+  {
+    "seq": 25,
+    "ts": "<MASKED>",
+    "t": "<MASKED>",
+    "type": "stage_done",
+    "stage": "write_report",
+    "text": "Writing the report",
+    "data": {
+      "duration_sec": "<MASKED>"
+    }
+  }
+]

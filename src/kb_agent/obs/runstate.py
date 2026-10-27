@@ -80,6 +80,9 @@ class RunStateWriter:
         skipped: dict[str, str],
         inputs: dict[str, Any],
         owner_id: str | None,
+        project_id: str | None = None,
+        source_uri: str | None = None,
+        vector_store: str | None = None,
     ) -> None:
         self._put(
             "_started.json",
@@ -91,9 +94,18 @@ class RunStateWriter:
                 "stage_order": stage_order,
                 "skipped": skipped,
                 "inputs": inputs,
+                # Part B additions (additive; absent-friendly for legacy readers).
+                "project_id": project_id,
+                "source_uri": source_uri,
+                "vector_store": vector_store,
             },
         )
         self.event("run_started", stage=None, text="Run created", data={"skipped": list(skipped)})
+
+    def file_outcome(self, name: str, status: str, route: str | None = None) -> None:
+        """Emit a per-file outcome event (names + statuses only; B5.2)."""
+        self.event("file_outcome", stage="normalize_docs",
+                   text=f"{name}: {status}", data={"name": name, "status": status, "route": route})
 
     # --- _events/{seq}.json --------------------------------------------------
     def event(self, type_: str, *, stage: str | None, text: str, data: dict | None = None) -> None:
@@ -175,14 +187,33 @@ class RunStateWriter:
         logger.error("runstate_finished_write_failed", run_id=self._run_id, error=str(last_exc))
 
 
+# The nine dormant stage IDs, in their original order, used only by the legacy
+# placeholder path (A4.2) so an unchanged 13-step consumer still sees them.
+DORMANT_STAGE_IDS = (
+    "load_tickets", "adapt_tickets", "clean_tickets", "embed_texts",
+    "intent_cluster", "name_clusters", "kb_retrieve", "coverage_check",
+    "draft_article",
+)
+SKIP_NOT_IN_WORKFLOW = "Not part of this workflow"
+
+
 def compute_skip_set(has_tickets: bool, has_golden: bool) -> dict[str, str]:
-    """The skip set, computed BEFORE any stage runs, from the inputs (spec v2 §5.3)."""
-    skipped: dict[str, str] = {}
-    if not has_tickets:
-        for s in TICKET_DEPENDENT_STAGES:
-            skipped[s] = SKIP_NO_TICKETS
-    if not has_golden:
-        # kb_retrieve no-ops without a question set; mark it skipped so the UI and
-        # manifest agree rather than claiming a check that did not happen.
-        skipped["kb_retrieve"] = SKIP_NO_QUESTION_SET
-    return skipped
+    """The skip set for the ACTIVE KB-only workflow (v3).
+
+    The active ``STAGE_ORDER`` contains only the four KB stages, none of which are
+    ever skipped, so this returns an empty set (A4.1). ``has_tickets``/``has_golden``
+    are accepted for call-site compatibility and ignored. The legacy 13-stage
+    placeholder behaviour lives in :func:`legacy_placeholder_skip_set`.
+    """
+    return {}
+
+
+def legacy_placeholder_skip_set() -> dict[str, str]:
+    """Skip set when ``workflow.legacy_stage_placeholders`` is true (A4.2).
+
+    Marks every dormant stage id as skipped with the reason
+    ``"Not part of this workflow"``, so an unchanged consumer with a fixed
+    13-step list shows the nine removed steps as skipped rather than pending
+    forever.
+    """
+    return {s: SKIP_NOT_IN_WORKFLOW for s in DORMANT_STAGE_IDS}

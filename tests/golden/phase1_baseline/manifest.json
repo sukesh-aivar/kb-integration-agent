@@ -1,0 +1,212 @@
+{
+  "artifacts": {
+    "report": "s3://fake-bucket/runs/base/report.md",
+    "report_json": "s3://fake-bucket/runs/base/report.json"
+  },
+  "config_snapshot": {
+    "clustering": {
+      "cluster_threshold": 500,
+      "hdbscan": {
+        "min_cluster_size": 15
+      },
+      "umap": {
+        "metric": "cosine",
+        "n_components": 10
+      }
+    },
+    "cost": {
+      "bda_budget_usd_per_run": 50.0,
+      "bda_page_cap_per_run": 2000
+    },
+    "coverage": {
+      "retrieval_score_threshold": 0.5,
+      "top_intents_to_test": 10
+    },
+    "drafting": {
+      "min_source_tickets": 5
+    },
+    "knowledge_base": {
+      "chunking_strategy": "hierarchical",
+      "retrieval_top_k": 5,
+      "vector_store": "s3_vectors"
+    },
+    "planner": {
+      "enabled": false,
+      "max_planner_steps": 20,
+      "max_retune_attempts_per_stage": 2
+    },
+    "routing": {
+      "escalation": {
+        "max_garbled_char_ratio": 0.15,
+        "min_chars_per_page_floor": 50
+      },
+      "max_file_size_mb": 50,
+      "max_image_area_ratio": 0.5,
+      "max_tables": 3,
+      "min_chars_per_page": 100
+    },
+    "seed": 42,
+    "validation": {
+      "non_english_action": "flag",
+      "pii_regex_enabled": true
+    },
+    "versions": {
+      "prompt_pack": "v0.1"
+    }
+  },
+  "ended_at": "<MASKED>",
+  "errors": [],
+  "input_files": [],
+  "library_versions": {
+    "boto3": "1.43.114",
+    "hdbscan": "unknown",
+    "numpy": "1.26.4",
+    "pydantic": "2.9.2",
+    "sklearn": "1.5.2",
+    "umap": "0.5.6"
+  },
+  "metrics": {
+    "cluster_count": null,
+    "coverage_fp_rate": null,
+    "document_count": 4,
+    "estimated_cost_usd": null,
+    "gaps_flagged": null,
+    "intent_purity": null,
+    "noise_share": null,
+    "pii_files_rejected": null,
+    "recall_at_5": null,
+    "routing_accuracy": null,
+    "silhouette": null,
+    "stage_durations_sec": {
+      "kb_create": 0.0001,
+      "kb_ingest": 0.0001,
+      "normalize_docs": 0.0403,
+      "write_report": 0.0
+    },
+    "ticket_count": null
+  },
+  "model_calls": [],
+  "review_records": [
+    {
+      "artifact_id": "report",
+      "history": [],
+      "kind": "report",
+      "model_id": null,
+      "prompt_version": null,
+      "status": "pending_review",
+      "uri": "s3://fake-bucket/runs/base/report.md"
+    }
+  ],
+  "routing_decisions": [
+    {
+      "file": "faq.md",
+      "forced": false,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "DEFAULT",
+      "rule_id": 1
+    },
+    {
+      "file": "installation.md",
+      "forced": false,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "DEFAULT",
+      "rule_id": 1
+    },
+    {
+      "file": "quota.md",
+      "forced": false,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "DEFAULT",
+      "rule_id": 1
+    },
+    {
+      "file": "conflicts.html",
+      "forced": false,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "DEFAULT",
+      "rule_id": 1
+    }
+  ],
+  "run_id": "base",
+  "stages": [
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "load_tickets",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "adapt_tickets",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "clean_tickets",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "embed_texts",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "intent_cluster",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "name_clusters",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": null,
+      "stage": "normalize_docs",
+      "status": "completed"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": null,
+      "stage": "kb_create",
+      "status": "completed"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": null,
+      "stage": "kb_ingest",
+      "status": "completed"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "Runs only when a question set is supplied",
+      "stage": "kb_retrieve",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "coverage_check",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": "No ticket export uploaded",
+      "stage": "draft_article",
+      "status": "skipped"
+    },
+    {
+      "duration_sec": "<MASKED>",
+      "output_location": null,
+      "stage": "write_report",
+      "status": "completed"
+    }
+  ],
+  "started_at": "<MASKED>"
+}

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-integration-agent/schemas/state.v1.schema.json",
+  "title": "runs/{run_id}/_state.json",
+  "description": "Live run state the backend reads to render the outputs screen (B5.2).",
+  "type": "object",
+  "required": ["knowledge_base_id", "ingestion", "files"],
+  "properties": {
+    "project_id": { "type": ["string", "null"] },
+    "knowledge_base_id": { "type": ["string", "null"] },
+    "data_source_id": { "type": ["string", "null"] },
+    "vector_store": {
+      "type": ["object", "null"],
+      "properties": {
+        "type": { "type": "string" },
+        "bucket": { "type": ["string", "null"] },
+        "index_name": { "type": ["string", "null"] },
+        "index_arn": { "type": ["string", "null"] },
+        "dimension": { "type": ["integer", "null"] },
+        "distance_metric": { "type": ["string", "null"] }
+      }
+    },
+    "vector_bucket": { "type": ["string", "null"] },
+    "index_name": { "type": ["string", "null"] },
+    "embedding_model": { "type": ["string", "null"] },
+    "chunking": { "type": "object" },
+    "provisioning": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource", "name", "action"],
+        "properties": {
+          "resource": { "type": "string" },
+          "name": { "type": "string" },
+          "action": { "type": "string" }
+        }
+      }
+    },
+    "routing": { "type": "array" },
+    "files": {
+      "type": "array",
+      "description": "Each item conforms to file_outcome.v1.schema.json.",
+      "items": { "type": "object", "required": ["name", "source_uri", "status"] }
+    },
+    "ingestion": {
+      "type": "object",
+      "properties": {
+        "job_id": { "type": ["string", "null"] },
+        "scanned": { "type": ["integer", "null"] },
+        "indexed": { "type": ["integer", "null"] },
+        "modified": { "type": ["integer", "null"] },
+        "failed": { "type": ["integer", "null"] },
+        "chunks_written": { "type": ["integer", "null"] }
+      }
+    },
+    "document_count": { "type": ["integer", "null"] },
+    "ticket_count": { "type": ["integer", "null"] }
+  }
+}

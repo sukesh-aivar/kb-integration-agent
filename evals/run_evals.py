@@ -1,5 +1,15 @@
 """Scored evaluation runner (spec 7.5 ``make eval``; spec 1.5 validation targets).
 
+.. note::
+
+    DORMANT-DEPENDENT dev script (v3 Part A). Offline evaluation harness, not
+    shipped in the runtime image and not imported by the active agent. Most of
+    its metrics (intent purity, silhouette/cluster diagnostics, planted-gap
+    detection) score the parked ticket/clustering flow, so it depends on the
+    ``dormant/`` code, the dormant evals metrics, and the
+    ``requirements-dormant.txt`` packages. Left in place unchanged in Part A;
+    trimming it to the KB-only metrics is deferred to Part B.
+
 Computes the ground-truth-scored metrics the per-run report cannot, because they
 need the hidden labels / fixtures:
 

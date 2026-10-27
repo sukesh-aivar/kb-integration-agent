@@ -1,7 +1,8 @@
 """Unit tests for feature extraction + routing (spec 4.2, 7.5 one fixture per rule).
 
-Builds real small documents in memory (PyMuPDF for PDFs, python-docx for DOCX) so
-feature extraction is exercised end-to-end, then routes them through the YAML rule
+Builds real small documents in memory (a tiny pure-Python PDF writer for PDFs,
+python-docx for DOCX) so feature extraction is exercised end-to-end via pdfplumber,
+then routes them through the YAML rule
 table and asserts the expected route + rule_id. Also drives every
 routing_fixtures.yaml case through the router using synthetic features.
 """
@@ -22,6 +23,7 @@ from kb_agent.documents.features import (
 )
 from kb_agent.documents.router import route_document
 from kb_agent.models import Route
+from tests.pdf_fixtures import make_empty_pdf, make_text_pdf
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = load_config()
@@ -32,26 +34,11 @@ RULES = load_routing_rules()
 
 
 def _make_text_pdf(text: str = "Hello world. " * 50, pages: int = 1) -> bytes:
-    import fitz
-
-    doc = fitz.open()
-    for _ in range(pages):
-        page = doc.new_page()
-        page.insert_text((72, 72), text)
-    data = doc.tobytes()
-    doc.close()
-    return data
+    return make_text_pdf(text, pages)
 
 
 def _make_empty_pdf(pages: int = 1) -> bytes:
-    import fitz
-
-    doc = fitz.open()
-    for _ in range(pages):
-        doc.new_page()  # no text -> scanned-like
-    data = doc.tobytes()
-    doc.close()
-    return data
+    return make_empty_pdf(pages)
 
 
 def _make_docx(with_image: bool = False, merged_table: bool = False) -> bytes:
@@ -152,18 +139,25 @@ def test_plain_docx_routes_default() -> None:
 
 def _features_from_fixture(fx: dict) -> DocumentFeatures:
     f = fx["features"]
+    fmt = f["format"]
+    # A representative detected_mime for the format (the router keys on `format`,
+    # but the field is non-optional and surfaced in the audit dump).
     mime = {
-        "text/plain": "text/plain",
-        "text/markdown": "text/markdown",
-        "image/png": "image/png",
+        "txt": "text/plain", "md": "text/markdown", "html": "text/html",
+        "csv": "text/csv", "json": "application/json", "jsonl": "application/json",
+        "png": "image/png", "jpeg": "image/jpeg",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "pdf": "application/pdf",
-    }[f["mime"]]
+        "xlsm": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+        "pdf": "application/pdf", "unknown": "application/octet-stream",
+    }.get(fmt, "application/octet-stream")
     return DocumentFeatures(
         file_id=fx["name"],
         detected_mime=mime,
-        size_bytes=1000,
+        format=fmt,
+        size_bytes=f.get("size_bytes", 1000),
         pdf_encrypted_or_unreadable=f.get("pdf_encrypted_or_unreadable", False),
         min_page_chars=f.get("min_page_chars"),
         max_page_image_area_ratio=f.get("max_page_image_area_ratio", 0.0),

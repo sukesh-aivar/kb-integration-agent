@@ -18,6 +18,7 @@ from kb_agent.aws.interfaces import (
     KnowledgeBaseClient,
     LlmClient,
     ObjectStore,
+    VectorStoreAdmin,
 )
 from kb_agent.config import AppConfig, Settings
 
@@ -35,6 +36,7 @@ class ClientSet:
     llm: LlmClient
     guardrail: GuardrailClient
     knowledge_base: KnowledgeBaseClient
+    vector_admin: VectorStoreAdmin
 
 
 def build_fake_client_set(bucket: str = "fake-bucket") -> ClientSet:
@@ -46,6 +48,7 @@ def build_fake_client_set(bucket: str = "fake-bucket") -> ClientSet:
         FakeKnowledgeBase,
         FakeLlm,
         FakeObjectStore,
+        FakeVectorStoreAdmin,
     )
 
     store = FakeObjectStore(bucket=bucket)
@@ -57,6 +60,7 @@ def build_fake_client_set(bucket: str = "fake-bucket") -> ClientSet:
         llm=FakeLlm(),
         guardrail=FakeGuardrail(),
         knowledge_base=FakeKnowledgeBase(store),
+        vector_admin=FakeVectorStoreAdmin(),
     )
 
 
@@ -80,6 +84,7 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
         BedrockKnowledgeBase,
         BedrockLlm,
         S3ObjectStore,
+        S3VectorsAdmin,
     )
 
     store = S3ObjectStore(session.client("s3"), settings.s3_bucket)
@@ -127,6 +132,7 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
         ),
         vector_store_config=_vector_store_config(settings, config),
     )
+    vector_admin = S3VectorsAdmin(session.client("s3vectors"))
     return ClientSet(
         mode="aws",
         store=store,
@@ -135,6 +141,7 @@ def build_aws_client_set(settings: Settings, config: AppConfig) -> ClientSet:  #
         llm=llm,
         guardrail=guardrail,
         knowledge_base=kb,
+        vector_admin=vector_admin,
     )
 
 

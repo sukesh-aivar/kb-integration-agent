@@ -1,0 +1,49 @@
+{
+  "agent_version": "v3",
+  "inputs": {
+    "documents": [
+      {
+        "uri": "s3://b/uploads/base/docs/faq.md"
+      },
+      {
+        "uri": "s3://b/uploads/base/docs/installation.md"
+      },
+      {
+        "uri": "s3://b/uploads/base/docs/quota.md"
+      },
+      {
+        "uri": "s3://b/uploads/base/docs/conflicts.html"
+      }
+    ],
+    "ticket": null
+  },
+  "owner_id": null,
+  "run_id": "base",
+  "skipped": {
+    "adapt_tickets": "No ticket export uploaded",
+    "clean_tickets": "No ticket export uploaded",
+    "coverage_check": "No ticket export uploaded",
+    "draft_article": "No ticket export uploaded",
+    "embed_texts": "No ticket export uploaded",
+    "intent_cluster": "No ticket export uploaded",
+    "kb_retrieve": "Runs only when a question set is supplied",
+    "load_tickets": "No ticket export uploaded",
+    "name_clusters": "No ticket export uploaded"
+  },
+  "stage_order": [
+    "load_tickets",
+    "adapt_tickets",
+    "clean_tickets",
+    "embed_texts",
+    "intent_cluster",
+    "name_clusters",
+    "normalize_docs",
+    "kb_create",
+    "kb_ingest",
+    "kb_retrieve",
+    "coverage_check",
+    "draft_article",
+    "write_report"
+  ],
+  "started_at": "<MASKED>"
+}

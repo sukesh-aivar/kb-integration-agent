@@ -49,6 +49,73 @@ class ObjectStore(Protocol):
         """List object keys under ``prefix``."""
         ...
 
+    # --- Part B additions (cross-bucket, conditional, server-side copy) ------
+
+    def head(self, key: str) -> dict[str, str] | None:
+        """Return object metadata (incl. ``content_hash`` if stored), or None.
+
+        Used for the skip-unchanged check (B3.2 step 8). None means no object.
+        """
+        ...
+
+    def copy(self, src_uri: str, dst_key: str) -> str:
+        """Server-side copy ``s3://bucket/key`` -> ``dst_key`` in the data bucket."""
+        ...
+
+    def put_if_absent(self, key: str, data: bytes) -> bool:
+        """Conditional write (If-None-Match: *). True if written, False if the key
+        already existed. The primitive behind the project lock (B4.4)."""
+        ...
+
+    def list_uri(self, uri: str) -> list[str]:
+        """List full ``s3://bucket/key`` URIs under a prefix uri (cross-bucket)."""
+        ...
+
+    def delete(self, key: str) -> None:
+        """Delete the object at ``key`` (used to release the project lock)."""
+        ...
+
+
+@runtime_checkable
+class VectorStoreAdmin(Protocol):
+    """S3 Vectors control-plane (Part B B4.2). Create-or-verify, never mutate.
+
+    After an index is created its dimension, distance metric and non-filterable
+    keys are IMMUTABLE; :meth:`get_index` lets the provisioner VERIFY a returning
+    project's index matches and raise ``provisioning_conflict`` on a mismatch
+    instead of trying (and failing) to update it.
+    """
+
+    def ensure_vector_bucket(self, name: str) -> str:
+        """Create the vector bucket if missing (idempotent); return its name/arn."""
+        ...
+
+    def get_index(self, bucket: str, name: str) -> dict | None:
+        """Return the index config (dimension/metric/data_type/non_filterable_keys
+        /arn) or None if it does not exist."""
+        ...
+
+    def create_index(
+        self,
+        bucket: str,
+        name: str,
+        *,
+        dimension: int,
+        distance_metric: str,
+        data_type: str,
+        non_filterable_keys: list[str],
+    ) -> dict:
+        """Create a vector index; return its config incl. ``arn``."""
+        ...
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:
+        """Tag a vector resource (best-effort; cleanup relies on tags)."""
+        ...
+
+    def delete_index(self, bucket: str, name: str) -> None:
+        """Delete a vector index (cleanup script only)."""
+        ...
+
 
 @runtime_checkable
 class BdaClient(Protocol):
@@ -143,6 +210,45 @@ class KnowledgeBaseClient(Protocol):
 
     def retrieve(self, kb_id: str, query: str, top_k: int) -> list[RetrievedPassage]:
         """Return the top-k passages for ``query`` (recall@k uses this)."""
+        ...
+
+    # --- Part B: create-or-verify provisioning (B4.2) ------------------------
+
+    def find_knowledge_base(self, name: str) -> dict | None:
+        """Find a KB by exact name (paginated search); return its summary or None."""
+        ...
+
+    def get_knowledge_base(self, kb_id: str) -> dict | None:
+        """Fetch a KB by id; return its config (storage index arn, embedding
+        model, status) or None if it does not exist."""
+        ...
+
+    def list_data_sources(self, kb_id: str) -> list[dict]:
+        """List the KB's data sources (id, name, inclusion prefixes, chunking)."""
+        ...
+
+    def find_or_create_data_source(
+        self,
+        kb_id: str,
+        name: str,
+        *,
+        inclusion_prefix: str,
+        chunking_strategy: str,
+        data_deletion_policy: str,
+    ) -> dict:
+        """Return the matching data source, creating it if absent; verify config."""
+        ...
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:
+        """Tag a KB/data-source resource (best-effort)."""
+        ...
+
+    def delete_knowledge_base(self, kb_id: str) -> None:
+        """Delete a KB (cleanup script only)."""
+        ...
+
+    def delete_data_source(self, kb_id: str, data_source_id: str) -> None:
+        """Delete a data source (cleanup script only)."""
         ...
 
 

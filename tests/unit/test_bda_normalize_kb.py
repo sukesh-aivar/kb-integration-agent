@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from kb_agent.aws.clientset import build_fake_client_set
 from kb_agent.config import load_config
 from kb_agent.documents.bda import BdaProcessor, content_cache_key
-from kb_agent.documents.knowledge_base import KnowledgeBaseStage, recall_at_5_from_golden
+from kb_agent.documents.knowledge_base import KnowledgeBaseStage
 from kb_agent.documents.normalize import normalize_documents, sidecar_payload
 from kb_agent.models import DocumentMetadata, Route, SourceType
 
@@ -110,24 +110,5 @@ def test_kb_create_ingest_retrieve_roundtrip() -> None:
     assert passages
     assert "password" in passages[0].source_id  # best match is the password doc
 
-
-def test_recall_at_5_from_golden_scores() -> None:
-    cs = build_fake_client_set()
-    prefix = "kb/run-1/docs"
-    cs.store.put_text(f"{prefix}/reset.md", "reset your password from account settings")
-    stage = KnowledgeBaseStage(cs.knowledge_base, CONFIG)
-    stage.create("kb", prefix)
-    stage.ingest()
-
-    golden = [
-        {"id": "q1", "question": "how to reset my password", "expected_source_ids": ["reset.md"]},
-        {
-            "id": "q2",
-            "question": "unrelated nonsense query zzz",
-            "expected_source_ids": ["missing.md"],
-        },
-    ]
-    recall, detail = recall_at_5_from_golden(stage, golden, k=5)
-    assert recall == 0.5  # one hit, one miss
-    assert detail[0]["hit"] is True
-    assert detail[1]["hit"] is False
+# NOTE: test_recall_at_5_from_golden_scores moved to tests/dormant/test_recall.py
+# (recall_at_5_from_golden moved to kb_agent.dormant.documents_extras in the v3 reorg).

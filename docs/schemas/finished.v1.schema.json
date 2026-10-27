@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-integration-agent/schemas/finished.v1.schema.json",
+  "title": "runs/{run_id}/_finished.json",
+  "type": "object",
+  "required": ["status", "ended_at"],
+  "properties": {
+    "status": { "type": "string", "enum": ["completed", "needs_review", "failed"] },
+    "ended_at": { "type": "string" },
+    "elapsed_seconds": { "type": "number" },
+    "failing_stage": { "type": ["string", "null"] },
+    "error": {
+      "type": ["object", "null"],
+      "properties": {
+        "kind": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

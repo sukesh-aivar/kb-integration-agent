@@ -13,3 +13,10 @@ runs/
 sample_pack/tickets/
 *.md
 !README.md
+
+# --- Dormant code (parked ticket/clustering/join/planner stack, v3 Part A) ---
+# Excluded from the active runtime image. The active workflow never imports
+# these, and their deps live in requirements-dormant.txt (not installed here).
+src/kb_agent/dormant/
+dormant/
+config/dormant/

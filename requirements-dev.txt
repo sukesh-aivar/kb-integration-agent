@@ -4,9 +4,17 @@
 pytest==8.3.4
 pytest-cov==6.0.0
 pytest-mock==3.14.0
+jsonschema==4.23.0        # validate the published JSON Schemas in tests (dev-only)
 moto==5.0.22              # AWS mocking for offline component-style tests
 ruff==0.8.4
 black==24.10.0
 mypy==1.13.0
 types-PyYAML==6.0.12.20240917
 pre-commit==4.0.1
+
+# DEV-ONLY: PyMuPDF (AGPL) is NOT a runtime dependency - it was removed from
+# requirements.txt in Part B (PDF reading now uses pdfplumber). It is kept here
+# solely to regenerate the committed scanned/degraded-PDF fixtures with
+# sample_pack/fetch_documents.py (genuine image rasterisation the read-only
+# runtime stack cannot produce). The agent and its image never install it.
+pymupdf==1.24.14

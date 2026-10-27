@@ -8,6 +8,16 @@
 # --- Reproducibility (spec 2.3) ---
 seed: 42                       # single seed fed to UMAP/HDBSCAN and any sampling
 
+# --- Workflow (v3 KB-only reorg, A4.3) ---
+# mode must be kb_only; any other value fails at load. legacy_stage_placeholders
+# makes the reported stage order the original 13 (nine dormant stages shown as
+# skipped) for an unchanged 13-step consumer. legacy_status_needs_review is a
+# Part-B flag (re-emit completed as needs_review); default false.
+workflow:
+  mode: kb_only
+  legacy_stage_placeholders: false
+  legacy_status_needs_review: false
+
 # --- Routing thresholds (spec 4.2 rule table) ---
 # These feed config/routing_rules.yaml. Kept here so a reviewer tunes numbers in
 # one place.
@@ -20,6 +30,61 @@ routing:
   escalation:
     min_chars_per_page_floor: 50
     max_garbled_char_ratio: 0.15
+
+# --- Source handling + many-files limits (Part B B3/B6) ---
+# source.max_file_mb and source.kb_path_max_mb are referenced by name from
+# config/routing_rules.yaml (rules 16, 14, 17, 18, 1).
+source:
+  max_files: 100               # TODO(confirm) B-Q1; KB job supports up to 1000 (BDA)
+  max_file_mb: 500             # hard ceiling; over it -> REJECT
+  kb_path_max_mb: 50           # Bedrock KB per-file limit (verified)
+  bda_max_pages: 3000          # BDA native per-document page limit (verified)
+
+# --- Multi-file processing (Part B B3/B6) ---
+processing:
+  max_workers: 4               # local pool size
+  bda_concurrency: 3           # TODO(confirm) B-Q7 BDA account concurrency quota
+  temp_dir: /tmp
+
+# --- Provisioning: create-or-verify (Part B B4/B6) ---
+provisioning:
+  enabled: true                # false -> use the hand-built KB_AGENT_VECTOR_INDEX_ARN
+  vector_bucket_name: kb-agent-vectors
+  name_prefix: kb-
+  ds_prefix: ds-
+  kb_source_root: projects
+  lock_ttl_seconds: 300
+  lock_wait_seconds: 900
+  data_deletion_policy: DELETE # DELETE | RETAIN (verified default DELETE)
+
+# --- Vector store (S3 Vectors) index parameters (Part B B4.2/B6) ---
+# IMMUTABLE after index creation (dimension/metric/non_filterable_keys); a
+# mismatch on a returning project is a provisioning_conflict, never an update.
+vector_store:
+  type: s3_vectors
+  dimension: 1024              # must equal the embedding model output (Titan v2)
+  distance_metric: cosine
+  data_type: float32
+  non_filterable_keys:         # 9 of the 10-key limit
+    - AMAZON_BEDROCK_TEXT
+    - AMAZON_BEDROCK_METADATA
+    - source
+    - source_type
+    - route
+    - content_hash
+    - run_id
+    - ingested_at
+    - language
+
+# --- Ingestion-job polling (Part B B5/B6) ---
+ingestion:
+  poll_seconds: 10
+  timeout_seconds: 3600
+
+# --- Structured-conversion limits (Part B B2.6/B6) ---
+json:
+  max_depth: 5                 # dotted-key flatten depth cap
+  max_input_mb: 50
 
 # --- Validation (spec 4.2 validate_uploads) ---
 validation:
@@ -34,7 +99,11 @@ knowledge_base:
   chunking_strategy: hierarchical   # fixed_size | hierarchical | semantic
   retrieval_top_k: 5           # recall@5 baseline
 
-# --- Clustering (spec 4.3 intent_cluster) ---
+# --- DORMANT (v3): clustering/drafting/coverage/planner belong to the dormant
+# ticket+join workflow. Kept for when those stages return; not read by the active
+# KB-only workflow. Do not delete. ---
+
+# --- Clustering (spec 4.3 intent_cluster) --- DORMANT
 clustering:
   cluster_threshold: 500       # >=: UMAP+HDBSCAN ; <: LLM categorise (heuristic)
   umap:
@@ -60,11 +129,6 @@ planner:
   enabled: false
   max_planner_steps: 20
   max_retune_attempts_per_stage: 2
-
-# --- Cost guards (spec 4.2 bda_process) ---
-cost:
-  bda_page_cap_per_run: 2000
-  bda_budget_usd_per_run: 50
 
 # --- Prompt/model version pinning recorded in every run manifest (spec 2.3) ---
 versions:

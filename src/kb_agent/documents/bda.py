@@ -16,7 +16,6 @@ import hashlib
 import json
 
 from kb_agent.aws.interfaces import BdaClient, BdaResult, ObjectStore
-from kb_agent.exceptions import BudgetExceededError
 from kb_agent.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -47,26 +46,26 @@ class BdaProcessor:
         store: ObjectStore,
         *,
         cache_prefix: str = "bda-cache",
-        page_cap: int = 2000,
         parser_config: dict | None = None,
     ) -> None:
         self._bda = bda
         self._store = store
         self._cache_prefix = cache_prefix
-        self._page_cap = page_cap
         self._parser_config = parser_config or {"granularity": "page+element", "format": "markdown"}
         self._pages_this_run = 0
 
     @property
     def pages_processed(self) -> int:
-        """Total BDA pages processed this run (fed to the cost report)."""
+        """Total BDA pages processed this run (a visibility metric, not a limit)."""
         return self._pages_this_run
 
     def process(self, file_id: str, data: bytes, input_s3_uri: str) -> BdaResult:
         """Process one document, using the cache on a content+config hit.
 
-        Enforces the per-run page cap (spec 4.2 cost guards): exceeding it raises
-        rather than silently spending.
+        No page or cost cap is enforced (Part B decision 4): the only ceiling is
+        BDA's own native per-document page limit, which the router applies up
+        front by rejecting a file that declares more pages than
+        ``source.bda_max_pages``. ``pages_processed`` is tracked for visibility.
         """
         key = content_cache_key(data, self._parser_config)
         cache_md_key = f"{self._cache_prefix}/{key}.md"
@@ -82,12 +81,6 @@ class BdaProcessor:
             )
 
         result = self._bda.process_document(input_s3_uri, f"{self._cache_prefix}/{key}")
-
-        if self._pages_this_run + result.pages_processed > self._page_cap:
-            raise BudgetExceededError(
-                f"BDA page cap {self._page_cap} would be exceeded "
-                f"(used {self._pages_this_run}, +{result.pages_processed})"
-            )
         self._pages_this_run += result.pages_processed
 
         # Store the markdown under the content-hash key so the next identical

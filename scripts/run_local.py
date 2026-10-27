@@ -1,5 +1,15 @@
 """Local pipeline runner (spec 10 step 7; `make run-fake` / `make run-aws`).
 
+.. note::
+
+    DORMANT-DEPENDENT dev script (v3 Part A). This is a developer convenience
+    runner, not shipped in the runtime image and not imported by the active
+    agent. It stages the full sample pack (including the ticket fixtures that
+    now live under ``dormant/sample_pack/``) and can exercise the legacy
+    13-stage flow, so it may depend on the parked ``dormant/`` code and
+    ``requirements-dormant.txt`` packages. Left in place unchanged in Part A;
+    its alignment to the KB-only workflow is deferred to Part B.
+
 Stages the sample pack into the chosen client set and runs the full pipeline. In
 ``--mode fake`` everything is in-memory and offline; in ``--mode aws`` real
 services are used (and the sample pack is uploaded to S3 first). Prints the

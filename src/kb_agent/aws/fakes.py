@@ -56,12 +56,16 @@ class FakeObjectStore:
     def __init__(self, bucket: str = "fake-bucket") -> None:
         self._bucket = bucket
         self._store: dict[str, bytes] = {}
+        # Per-key metadata (mirrors S3 user metadata); content_hash powers the
+        # skip-unchanged check (B3.2 step 8).
+        self._meta: dict[str, dict[str, str]] = {}
 
     def _uri(self, key: str) -> str:
         return f"s3://{self._bucket}/{key}"
 
     def put_bytes(self, key: str, data: bytes) -> str:
         self._store[key] = data
+        self._meta[key] = {"content_hash": hashlib.sha256(data).hexdigest()}
         return self._uri(key)
 
     def put_text(self, key: str, text: str) -> str:
@@ -78,6 +82,37 @@ class FakeObjectStore:
 
     def list_keys(self, prefix: str) -> list[str]:
         return sorted(k for k in self._store if k.startswith(prefix))
+
+    # --- Part B additions ----------------------------------------------------
+
+    def head(self, key: str) -> dict[str, str] | None:
+        if key not in self._store:
+            return None
+        return dict(self._meta.get(key, {}))
+
+    def copy(self, src_uri: str, dst_key: str) -> str:
+        src_key = src_uri.split("/", 3)[-1] if src_uri.startswith("s3://") else src_uri
+        self._store[dst_key] = self._store[src_key]
+        self._meta[dst_key] = dict(self._meta.get(src_key, {}))
+        return self._uri(dst_key)
+
+    def put_if_absent(self, key: str, data: bytes) -> bool:
+        """Conditional write: only succeeds if the key does not already exist."""
+        if key in self._store:
+            return False
+        self.put_bytes(key, data)
+        return True
+
+    def list_uri(self, uri: str) -> list[str]:
+        if uri.startswith("s3://"):
+            _bucket, _, prefix = uri[len("s3://"):].partition("/")
+        else:
+            prefix = uri
+        return [f"s3://{self._bucket}/{k}" for k in self.list_keys(prefix)]
+
+    def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+        self._meta.pop(key, None)
 
 
 class FakeBda:
@@ -256,6 +291,10 @@ class FakeKnowledgeBase:
         self._kbs: dict[str, str] = {}
         self._data_source_id: str | None = None
         self._last_ingestion_stats: dict | None = None
+        # Part B provisioning state (create-or-verify).
+        self._kb_info: dict[str, dict[str, str]] = {}
+        self._ds_info: dict[str, dict[str, dict]] = {}
+        self._tags: dict[str, dict[str, str]] = {}
 
     @property
     def data_source_id(self) -> str | None:
@@ -331,6 +370,131 @@ class FakeKnowledgeBase:
                 scored.append(p.model_copy(update={"score": round(score, 4)}))
         scored.sort(key=lambda p: p.score, reverse=True)
         return scored[:top_k]
+
+    # --- Part B: create-or-verify provisioning (B4.2) ------------------------
+
+    def find_knowledge_base(self, name: str) -> dict | None:
+        for kb_id, info in self._kb_info.items():
+            if info.get("name") == name:
+                return {"id": kb_id, "name": name}
+        return None
+
+    def get_knowledge_base(self, kb_id: str) -> dict | None:
+        info = self._kb_info.get(kb_id)
+        if info is None:
+            return None
+        return {"id": kb_id, "status": "ACTIVE", **info}
+
+    def list_data_sources(self, kb_id: str) -> list[dict]:
+        return list(self._ds_info.get(kb_id, {}).values())
+
+    def find_or_create_data_source(
+        self, kb_id: str, name: str, *, inclusion_prefix: str,
+        chunking_strategy: str, data_deletion_policy: str,
+    ) -> dict:
+        existing = self._ds_info.setdefault(kb_id, {})
+        if name in existing:
+            return {**existing[name], "_created": False}
+        ds = {
+            "id": f"fake-ds-{kb_id}-{name}", "name": name,
+            "inclusion_prefix": inclusion_prefix,
+            "chunking_strategy": chunking_strategy,
+            "data_deletion_policy": data_deletion_policy,
+        }
+        existing[name] = ds
+        self._data_source_id = ds["id"]
+        self._kbs[kb_id] = inclusion_prefix
+        return {**ds, "_created": True}
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:
+        self._tags.setdefault(arn, {}).update(tags)
+
+    def delete_knowledge_base(self, kb_id: str) -> None:
+        self._kb_info.pop(kb_id, None)
+        self._ds_info.pop(kb_id, None)
+        self._kbs.pop(kb_id, None)
+
+    def delete_data_source(self, kb_id: str, data_source_id: str) -> None:
+        dss = self._ds_info.get(kb_id, {})
+        for name, ds in list(dss.items()):
+            if ds["id"] == data_source_id:
+                dss.pop(name)
+
+    def create_kb_record(
+        self, name: str, *, index_arn: str, embedding_model_arn: str
+    ) -> str:
+        """Create a KB (provisioning path) and remember its verifiable config."""
+        kb_id = f"fake-kb-{name}"
+        self._kb_info[kb_id] = {
+            "name": name, "index_arn": index_arn,
+            "embedding_model_arn": embedding_model_arn,
+        }
+        return kb_id
+
+
+class FakeVectorStoreAdmin:
+    """In-memory S3 Vectors control-plane. Enforces naming + immutability.
+
+    Mirrors the real control plane just enough to exercise create-or-verify: a
+    second ``create_index`` with different parameters is rejected (the real API
+    cannot update them), and :meth:`get_index` returns the stored config so the
+    provisioner can detect a mismatch and raise provisioning_conflict.
+    """
+
+    def __init__(self) -> None:
+        self._buckets: set[str] = set()
+        self._indexes: dict[tuple[str, str], dict] = {}
+        self._tags: dict[str, dict[str, str]] = {}
+
+    def ensure_vector_bucket(self, name: str) -> str:
+        _assert_bucket_name(name)
+        self._buckets.add(name)
+        return f"arn:aws:s3vectors:::bucket/{name}"
+
+    def get_index(self, bucket: str, name: str) -> dict | None:
+        idx = self._indexes.get((bucket, name))
+        return dict(idx) if idx else None
+
+    def create_index(
+        self, bucket: str, name: str, *, dimension: int, distance_metric: str,
+        data_type: str, non_filterable_keys: list[str],
+    ) -> dict:
+        _assert_index_name(name)
+        if bucket not in self._buckets:
+            raise ValueError(f"vector bucket {bucket!r} does not exist")
+        key = (bucket, name)
+        config = {
+            "arn": f"arn:aws:s3vectors:::bucket/{bucket}/index/{name}",
+            "name": name, "dimension": dimension, "distance_metric": distance_metric,
+            "data_type": data_type, "non_filterable_keys": list(non_filterable_keys),
+        }
+        existing = self._indexes.get(key)
+        if existing is not None:
+            # Immutable: a create against an existing index must match exactly.
+            if any(existing[k] != config[k] for k in
+                   ("dimension", "distance_metric", "data_type", "non_filterable_keys")):
+                raise ValueError("index already exists with different immutable parameters")
+            return dict(existing)
+        self._indexes[key] = config
+        return dict(config)
+
+    def tag(self, arn: str, tags: dict[str, str]) -> None:
+        self._tags.setdefault(arn, {}).update(tags)
+
+    def delete_index(self, bucket: str, name: str) -> None:
+        self._indexes.pop((bucket, name), None)
+
+
+def _assert_bucket_name(name: str) -> None:
+    import re as _re
+    if not _re.match(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", name):
+        raise ValueError(f"invalid vector bucket name {name!r}")
+
+
+def _assert_index_name(name: str) -> None:
+    import re as _re
+    if not _re.match(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", name):
+        raise ValueError(f"invalid vector index name {name!r}")
 
 
 def _top_word(text: str) -> str:

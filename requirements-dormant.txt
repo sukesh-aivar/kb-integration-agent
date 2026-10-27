@@ -1,0 +1,38 @@
+# DORMANT runtime dependencies for the KB Integration Agent.
+#
+# These packages are ONLY needed by the parked ticket / clustering / join /
+# planner code that moved to src/kb_agent/dormant/, the top-level dormant/
+# scripts + sample pack, and the dormant evals. They are NOT installed in the
+# active runtime image (see .dockerignore / requirements.txt). Install with:
+#
+#     pip install -r requirements-dormant.txt
+#
+# (requirements-dormant.txt intentionally does NOT `-r requirements.txt`; the
+# active deps are installed separately. Install both for dormant dev work.)
+#
+# Python target: 3.11 (umap-learn 0.5.6 ships cp311 wheels; hdbscan 0.8.38
+# builds against the numpy 1.26 ABI on cp311). 3.13/3.14 are NOT supported
+# because numba/hdbscan wheels lag the newest CPython.
+#
+# Versions are the exact pins carried over from the pre-split requirements.txt
+# (no version changes in Part A - moves are moves).
+
+# --- Tickets (dormant: src/kb_agent/dormant/tickets/, dormant/scripts/) ---
+# Evidence: pandas.read_csv / read_excel in the dormant ticket loaders and the
+# dormant/sample_pack ticket fixtures; not imported anywhere under the active
+# src/kb_agent tree (verified by tests/unit/test_no_evals_import_in_src.py).
+# NOTE: openpyxl (pandas' xlsx engine) moved to the ACTIVE requirements.txt in
+# Part B (the XLSX CONVERT route uses it directly). Dormant dev work installs
+# both files, so pandas still finds its engine.
+pandas==2.2.3             # csv / xlsx loading
+
+# --- Clustering (dormant: src/kb_agent/dormant/pipeline_stages.py, join/) ---
+# Evidence: scikit-learn silhouette_score in _silhouette_excluding_noise;
+# umap-learn + hdbscan in the dormant clustering stages; numba/llvmlite are
+# transitive umap-learn build/runtime deps pinned so the dormant env resolves.
+numpy==1.26.4             # pinned <2.0: numba/hdbscan on cp311 need the 1.26 ABI
+scikit-learn==1.5.2       # silhouette, utilities (HDBSCAN also available here)
+umap-learn==0.5.6         # dimensionality reduction
+hdbscan==0.8.38.post1     # density clustering
+numba==0.60.0             # umap-learn JIT dependency (pinned for the 1.26 numpy ABI)
+llvmlite==0.43.0          # numba LLVM binding (matched to numba 0.60)

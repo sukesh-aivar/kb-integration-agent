@@ -1,0 +1,46 @@
+{
+  "caveats": [
+    "This run used FAKE clients (in-memory stand-ins for S3/BDA/KB/embeddings/LLM).",
+    "Intent purity, cluster count and silhouette here are SMOKE-TEST values from a hashed-bag-of-words stand-in, not a semantic embedding model. Do NOT tune clustering parameters against them.",
+    "Fake-mode recall@5 is NOT evidence that the >=0.80 retrieval target is met. Real recall requires Bedrock embeddings (--mode aws) and a human-approved golden set; the committed golden_set.jsonl still contains placeholder rows."
+  ],
+  "coverage": [],
+  "draft_articles": [],
+  "drafting_summary": {
+    "drafted": 0,
+    "intents_considered": 0,
+    "skip_reasons": {},
+    "skipped": 0
+  },
+  "intent_view": [],
+  "knowledge_base": {
+    "kb_id": "fake-kb-kb-base",
+    "recall_at_5": null
+  },
+  "metrics": {
+    "cluster_count": null,
+    "coverage_fp_rate": null,
+    "document_count": 4,
+    "estimated_cost_usd": null,
+    "gaps_flagged": null,
+    "intent_purity": null,
+    "noise_share": null,
+    "pii_files_rejected": null,
+    "recall_at_5": null,
+    "routing_accuracy": null,
+    "silhouette": null,
+    "stage_durations_sec": {},
+    "ticket_count": null
+  },
+  "mode": "fake",
+  "run_id": "base",
+  "status": "pending_review",
+  "synthetic_data_note": "All metrics in this report are measured on SYNTHETIC data. They validate the pipeline, not real-world quality.",
+  "targets": {
+    "expected_intent_count": 20,
+    "intent_purity": 0.8,
+    "pii_files_rejected": 1,
+    "planted_gaps": 3,
+    "recall_at_5": 0.8
+  }
+}

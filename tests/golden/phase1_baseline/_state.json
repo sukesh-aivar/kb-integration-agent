@@ -1,0 +1,56 @@
+{
+  "chunking": {
+    "child_tokens": 300,
+    "overlap_tokens": 60,
+    "parent_tokens": 1500,
+    "strategy": "hierarchical"
+  },
+  "data_source_id": "fake-ds-kb-base",
+  "document_count": 4,
+  "embedding_model": "fake-embeddings-v1",
+  "index_name": null,
+  "ingestion": {
+    "chunks_written": null,
+    "failed": 0,
+    "indexed": 4,
+    "modified": 0,
+    "scanned": 4
+  },
+  "knowledge_base_id": "fake-kb-kb-base",
+  "routing": [
+    {
+      "file": "faq.md",
+      "pages": 0,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "default",
+      "rule_id": 1,
+      "size": 5778
+    },
+    {
+      "file": "installation.md",
+      "pages": 0,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "default",
+      "rule_id": 1,
+      "size": 2646
+    },
+    {
+      "file": "quota.md",
+      "pages": 0,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "default",
+      "rule_id": 1,
+      "size": 2300
+    },
+    {
+      "file": "conflicts.html",
+      "pages": 0,
+      "reason": "Plain text / markdown / html / csv need no heavy parsing.",
+      "route": "default",
+      "rule_id": 1,
+      "size": 2981
+    }
+  ],
+  "ticket_count": null,
+  "vector_bucket": null
+}

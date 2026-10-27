@@ -1,78 +1,155 @@
-# Document routing rule table (spec 4.2). DATA, not code: the router evaluates
-# these rules in order, first match wins, and records the matched rule_id in the
-# audit log so a misroute is debuggable.
+# Document routing rule table (spec 4.2; Part B revised). DATA, not code: the
+# router evaluates these rules in order, FIRST MATCH WINS, and records the matched
+# rule_id in the audit log so a misroute is debuggable.
 #
-# Thresholds referenced by name resolve against config/default.yaml -> routing.*
-# so numbers live in one place.
+# Thresholds referenced by name resolve against config/default.yaml:
+#   source.max_file_mb     - hard ceiling (BDA's file limit); over it -> REJECT
+#   source.kb_path_max_mb  - Bedrock KB per-file limit (50 MB); over it a KB-path
+#                            file is rejected, a PDF/DOCX escalates to BDA instead
+#   routing.*              - PDF geometry thresholds (chars/page, image ratio, tables)
 #
-# route: one of DEFAULT | BDA | REJECT
+# route: one of DEFAULT | BDA | CONVERT | REJECT
+#   DEFAULT  copy the original to the KB prefix; Bedrock's own parser ingests it
+#   BDA      Bedrock Data Automation (scanned / layout-heavy / images)
+#   CONVERT  the agent extracts to Markdown deterministically, then the KB parser
+#            ingests the result (structured formats the KB parser handles poorly)
+#   REJECT   unsupported / unreadable / over-limit; recorded with a plain reason
+#
+# Routing is deterministic and uses only cheap signals first (size, format), so an
+# oversize file is never downloaded/parsed just to be rejected (B2.3). PDF geometry
+# predicates (rules 5-10) are only reached by PDFs that passed the cheap gates.
+#
 # Each rule documents WHY it exists; reviewers were not in the design meetings.
 
 rules:
-  - id: 1
-    description: "Plain text / markdown / html / csv need no heavy parsing."
-    route: DEFAULT
+  - id: 15
+    description: "Empty file; nothing to ingest."
+    route: REJECT
     when:
-      mime_in: ["text/plain", "text/markdown", "text/html", "text/csv"]
+      size_bytes_eq: 0
+
+  - id: 16
+    description: "Over the maximum supported size."
+    route: REJECT
+    when:
+      size_mb_gt: "source.max_file_mb"
 
   - id: 2
     description: "Standalone images have no text layer; BDA extracts their text."
     route: BDA
     when:
-      mime_in: ["image/jpeg", "image/png"]
+      format_in: ["jpeg", "png"]
+
+  - id: 11
+    description: "JSON is not supported by the knowledge base parser; extract to Markdown."
+    route: CONVERT
+    when:
+      format_in: ["json", "jsonl"]
+
+  - id: 12
+    description: "CSV: extract to a clean Markdown table for predictable retrieval."
+    route: CONVERT
+    when:
+      format: "csv"
+
+  - id: 13
+    description: "Spreadsheet: extract each sheet to Markdown (BDA cannot take XLSX)."
+    route: CONVERT
+    when:
+      format_in: ["xlsx", "xlsm"]
+
+  - id: 19
+    description: "Legacy .xls is unsupported (no xlrd); re-save as .xlsx."
+    route: REJECT
+    when:
+      format: "xls"
+
+  - id: 1
+    description: "Plain text or markup within the knowledge base per-file limit."
+    route: DEFAULT
+    when:
+      format_in: ["txt", "md", "html"]
+      size_mb_lte: "source.kb_path_max_mb"
+
+  - id: 14
+    description: "Text/markup over the knowledge base per-file limit."
+    route: REJECT
+    when:
+      format_in: ["txt", "md", "html"]
+      size_mb_gt: "source.kb_path_max_mb"
 
   - id: 3
     description: "DOCX with embedded images or complex tables needs layout-aware BDA."
     route: BDA
     when:
-      mime: "docx"
+      format: "docx"
       any_of:
         - embedded_images_gt: 0
         - complex_tables_gt: 0
 
+  - id: 17
+    description: "DOCX too large for the knowledge base parser; BDA output is smaller."
+    route: BDA
+    when:
+      format: "docx"
+      size_mb_gt: "source.kb_path_max_mb"
+
   - id: 4
-    description: "Plain DOCX/XLSX extract fine with the default local parser."
+    description: "Plain Word document; the default local parser handles it."
     route: DEFAULT
     when:
-      mime_in: ["docx", "xlsx"]
+      format_in: ["docx", "doc"]
 
   - id: 5
     description: "Encrypted or unreadable PDFs cannot be processed; reject for review."
     route: REJECT
     when:
-      mime: "pdf"
+      format: "pdf"
       pdf_encrypted_or_unreadable: true
+
+  - id: 18
+    description: "PDF too large for the knowledge base parser -> BDA."
+    route: BDA
+    when:
+      format: "pdf"
+      size_mb_gt: "source.kb_path_max_mb"
 
   - id: 6
     description: "A PDF page with too few extracted chars is scanned/image -> BDA."
     route: BDA
     when:
-      mime: "pdf"
+      format: "pdf"
       any_page_chars_lt: "routing.min_chars_per_page"
 
   - id: 7
     description: "A PDF page dominated by image area needs OCR-grade BDA."
     route: BDA
     when:
-      mime: "pdf"
+      format: "pdf"
       any_page_image_area_ratio_gt: "routing.max_image_area_ratio"
 
   - id: 8
     description: "Table-heavy PDFs lose structure in the default parser -> BDA."
     route: BDA
     when:
-      mime: "pdf"
+      format: "pdf"
       detected_tables_gte: "routing.max_tables"
 
   - id: 9
     description: "Multi-column PDFs mis-order text in the default parser -> BDA."
     route: BDA
     when:
-      mime: "pdf"
+      format: "pdf"
       multi_column: true
 
   - id: 10
-    description: "Default: cheap local parse, with a deterministic escalation backstop."
+    description: "Simple text PDF: cheap local parse, with a deterministic escalation backstop."
     route: DEFAULT
+    when:
+      format: "pdf"
+
+  - id: 99
+    description: "Unsupported format; reject visibly rather than silently skipping."
+    route: REJECT
     when:
       always: true

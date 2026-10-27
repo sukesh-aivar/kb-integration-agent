@@ -64,5 +64,5 @@ def test_routing_fixtures_cover_every_rule() -> None:
 def test_routing_fixtures_have_valid_routes() -> None:
     fixtures = yaml.safe_load((EVALS / "routing_fixtures.yaml").read_text())["fixtures"]
     for f in fixtures:
-        assert f["expected_route"] in {"DEFAULT", "BDA", "REJECT"}
+        assert f["expected_route"] in {"DEFAULT", "BDA", "CONVERT", "REJECT"}
         assert "features" in f and isinstance(f["features"], dict)

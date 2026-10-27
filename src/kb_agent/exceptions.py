@@ -31,21 +31,9 @@ class IngestionError(KBAgentError):
     """Knowledge base creation or ingestion failed."""
 
 
-class BudgetExceededError(KBAgentError):
-    """A per-run cost or page budget was exceeded (spec 4.2 cost guards)."""
-
-
-class PageCapExceededError(KBAgentError):
-    """Documents routed to BDA exceed the per-run page cap, checked BEFORE any
-    paid BDA call (spec v2 §5.8). Maps to error kind ``page_cap_exceeded``."""
-
-    def __init__(self, needed: int, cap: int) -> None:
-        self.needed = needed
-        self.cap = cap
-        super().__init__(
-            f"The documents need about {needed} pages of scanned parsing; "
-            f"the limit for this demo is {cap}."
-        )
+# NOTE (Part B, decision 4): the agent imposes NO page or cost caps. The former
+# BudgetExceededError / PageCapExceededError were removed - the only ceiling is
+# BDA's own native per-document page limit (surfaced as a REJECT with a reason).
 
 
 class PlannerLimitError(KBAgentError):

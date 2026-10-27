@@ -1,5 +1,14 @@
 """freq-test CLI: run the agent on S3 URIs you pass in (not the sample pack).
 
+.. note::
+
+    DORMANT-DEPENDENT dev script (v3 Part A). Developer CLI, not shipped in the
+    runtime image and not imported by the active agent. It accepts a
+    ``--ticket-uri`` and can drive the legacy ticket flow, so it may depend on
+    the parked ``dormant/`` code and ``requirements-dormant.txt`` packages.
+    Left in place unchanged in Part A; its alignment to the KB-only workflow is
+    deferred to Part B.
+
 Point it at a document and/or ticket CSV already sitting in your S3 bucket, pick
 the mode, and it runs the full pipeline and prints a clear final summary.
 
